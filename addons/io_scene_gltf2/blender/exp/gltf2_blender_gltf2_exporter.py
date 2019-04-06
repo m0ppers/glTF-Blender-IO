@@ -33,6 +33,7 @@ class GlTF2Exporter:
 
     def __init__(self, copyright=None):
         self.__finalized = False
+        self.has_aanal = False
 
         asset = gltf2_io.Asset(
             copyright=copyright,
@@ -98,7 +99,8 @@ class GlTF2Exporter:
             gltf2_io.TextureInfo,
             gltf2_io.MaterialPBRMetallicRoughness,
             gltf2_io.MaterialNormalTextureInfoClass,
-            gltf2_io.MaterialOcclusionTextureInfoClass
+            gltf2_io.MaterialOcclusionTextureInfoClass,
+            gltf2_io.MaterialDisplacementTextureInfoClass
         ]
 
     @property
@@ -134,6 +136,11 @@ class GlTF2Exporter:
 
         if is_glb:
             return self.__buffer.to_bytes()
+
+    def add_aanal_extension(self):
+        if not self.has_aanal:
+            self.has_aanal = True
+            self.__gltf.extensions_used.append('AANAL_verschiebung')
 
     def add_draco_extension(self):
         """
@@ -279,6 +286,8 @@ class GlTF2Exporter:
 
         # traverse into any other property
         if type(node) in self.__propertyTypeLookup:
+            if isinstance(node, gltf2_io.MaterialDisplacementTextureInfoClass):
+                self.add_aanal_extension()
             return __traverse_property(node)
 
         # binary data needs to be moved to a buffer and referenced with a buffer view

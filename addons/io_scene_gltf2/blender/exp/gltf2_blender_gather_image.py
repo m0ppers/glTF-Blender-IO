@@ -129,6 +129,7 @@ def __get_image_data(sockets_or_slots, export_settings):
 
     if __is_socket(sockets_or_slots):
         results = [__get_tex_from_socket(socket) for socket in sockets_or_slots]
+
         image = None
         for result, socket in zip(results, sockets_or_slots):
             if result.shader_node.image.channels == 0:
@@ -160,6 +161,10 @@ def __get_image_data(sockets_or_slots, export_settings):
                 source_channel = 0
                 source_channels_length = len(pixels)
 
+            if elem.to_socket.name == 'Opacity':
+                target_channel = 3
+                source_channels_length = 1
+
             # Change target channel for metallic and roughness.
             if elem.to_socket.name == 'Metallic':
                 target_channel = 2
@@ -184,7 +189,6 @@ def __get_image_data(sockets_or_slots, export_settings):
                 target_channel,
                 source_channels_length,
                 pixels)
-
             if image is None:
                 image = image_data
             else:

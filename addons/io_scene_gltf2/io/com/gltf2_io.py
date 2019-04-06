@@ -716,11 +716,46 @@ class MaterialOcclusionTextureInfoClass:
         assert isinstance(obj, dict)
         extensions = from_union([lambda x: from_dict(lambda x: from_dict(lambda x: x, x), x), from_none],
                                 obj.get("extensions"))
+
         extras = obj.get("extras")
         index = from_int(obj.get("index"))
         strength = from_union([from_float, from_none], obj.get("strength"))
         tex_coord = from_union([from_int, from_none], obj.get("texCoord"))
         return MaterialOcclusionTextureInfoClass(extensions, extras, index, strength, tex_coord)
+
+    def to_dict(self):
+        result = {}
+        result["extensions"] = from_union([lambda x: from_dict(lambda x: from_dict(lambda x: x, x), x), from_none],
+                                          self.extensions)
+        result["extras"] = self.extras
+        result["index"] = from_int(self.index)
+        result["strength"] = from_union([to_float, from_none], self.strength)
+        result["texCoord"] = from_union([from_int, from_none], self.tex_coord)
+        return result
+
+class MaterialDisplacementTextureInfoClass:
+    """The displacement map texture.
+
+    Reference to a texture.
+    """
+
+    def __init__(self, extensions, extras, index, strength, tex_coord):
+        self.extensions = extensions
+        self.extras = extras
+        self.index = index
+        self.strength = strength
+        self.tex_coord = tex_coord
+
+    @staticmethod
+    def from_dict(obj):
+        assert isinstance(obj, dict)
+        extensions = from_union([lambda x: from_dict(lambda x: from_dict(lambda x: x, x), x), from_none],
+                                obj.get("extensions"))
+        extras = obj.get("extras")
+        index = from_int(obj.get("index"))
+        strength = from_union([from_float, from_none], obj.get("strength"))
+        tex_coord = from_union([from_int, from_none], obj.get("texCoord"))
+        return MaterialDisplacementTextureInfoClass(extensions, extras, index, strength, tex_coord)
 
     def to_dict(self):
         result = {}
@@ -785,7 +820,7 @@ class Material:
     """The material appearance of a primitive."""
 
     def __init__(self, alpha_cutoff, alpha_mode, double_sided, emissive_factor, emissive_texture, extensions, extras,
-                 name, normal_texture, occlusion_texture, pbr_metallic_roughness):
+                 name, normal_texture, occlusion_texture, displacement_texture, pbr_metallic_roughness):
         self.alpha_cutoff = alpha_cutoff
         self.alpha_mode = alpha_mode
         self.double_sided = double_sided
@@ -796,6 +831,7 @@ class Material:
         self.name = name
         self.normal_texture = normal_texture
         self.occlusion_texture = occlusion_texture
+        self.displacement_texture = displacement_texture
         self.pbr_metallic_roughness = pbr_metallic_roughness
 
     @staticmethod
@@ -813,10 +849,17 @@ class Material:
         normal_texture = from_union([MaterialNormalTextureInfoClass.from_dict, from_none], obj.get("normalTexture"))
         occlusion_texture = from_union([MaterialOcclusionTextureInfoClass.from_dict, from_none],
                                        obj.get("occlusionTexture"))
+
+        displacement_texture = None
+        if "AANAL_verschiebung" in extensions:
+            if "displacementTexture" in extensions["AANAL_verschiebung"]:
+                displacement_texture = from_union([MaterialDisplacementTextureInfoClass.from_dict, from_none],
+                                            extensions["AANAL_verschiebung"]["displacementTexture"])
+                
         pbr_metallic_roughness = from_union([MaterialPBRMetallicRoughness.from_dict, from_none],
                                             obj.get("pbrMetallicRoughness"))
         return Material(alpha_cutoff, alpha_mode, double_sided, emissive_factor, emissive_texture, extensions, extras,
-                        name, normal_texture, occlusion_texture, pbr_metallic_roughness)
+                        name, normal_texture, occlusion_texture, displacement_texture, pbr_metallic_roughness)
 
     def to_dict(self):
         result = {}
@@ -835,6 +878,12 @@ class Material:
                                                 self.occlusion_texture)
         result["pbrMetallicRoughness"] = from_union([lambda x: to_class(MaterialPBRMetallicRoughness, x), from_none],
                                                     self.pbr_metallic_roughness)
+
+        if self.displacement_texture is not None:
+            result["extensions"] = {}
+            result["extensions"]["AANAL_verschiebung"] = {}
+            result["extensions"]["AANAL_verschiebung"]["displacementTexture"] = from_union([lambda x: to_class(MaterialDisplacementTextureInfoClass, x), from_none],
+                                                self.displacement_texture)
         return result
 
 

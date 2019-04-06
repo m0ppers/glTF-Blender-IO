@@ -20,6 +20,7 @@ from io_scene_gltf2.io.com.gltf2_io_extensions import Extension
 from io_scene_gltf2.blender.exp import gltf2_blender_gather_texture_info, gltf2_blender_export_keys
 from io_scene_gltf2.blender.exp import gltf2_blender_gather_material_normal_texture_info_class
 from io_scene_gltf2.blender.exp import gltf2_blender_gather_material_occlusion_texture_info_class
+from io_scene_gltf2.blender.exp import gltf2_blender_gather_material_displacement_texture_info_class
 
 from io_scene_gltf2.blender.exp import gltf2_blender_gather_materials_pbr_metallic_roughness
 from io_scene_gltf2.blender.exp import gltf2_blender_generate_extras
@@ -49,8 +50,10 @@ def gather_material(blender_material, mesh_double_sided, export_settings):
         name=__gather_name(blender_material, export_settings),
         normal_texture=__gather_normal_texture(blender_material, export_settings),
         occlusion_texture=__gather_occlusion_texture(blender_material, export_settings),
+        displacement_texture=__gather_displacement_texture(blender_material, export_settings),
         pbr_metallic_roughness=__gather_pbr_metallic_roughness(blender_material, export_settings)
     )
+
 
     return material
     # material = blender_primitive['material']
@@ -136,6 +139,10 @@ def __gather_extensions(blender_material, export_settings):
         if gltf2_blender_get.get_socket_or_texture_slot(blender_material, "Background") is not None:
             extensions["KHR_materials_unlit"] = Extension("KHR_materials_unlit", {}, False)
 
+    displacement = gltf2_blender_get.get_socket_or_texture_slot(blender_material, "displacement")
+    if displacement is not None:
+        extensions["AANAL_verschiebung"] = Extension("AANAL_verschiebung", {}, False)
+
     # TODO specular glossiness extension
 
     return extensions if extensions else None
@@ -166,6 +173,15 @@ def __gather_occlusion_texture(blender_material, export_settings):
         occlusion = gltf2_blender_get.get_socket_or_texture_slot_old(blender_material, "Occlusion")
     return gltf2_blender_gather_material_occlusion_texture_info_class.gather_material_occlusion_texture_info_class(
         (occlusion,),
+        export_settings)
+
+def __gather_displacement_texture(blender_material, export_settings):
+    displacement = gltf2_blender_get.get_socket_or_texture_slot(blender_material, "displacement")
+    if displacement is None:
+        displacement = gltf2_blender_get.get_socket_or_texture_slot_old(blender_material, "Displacement")
+    
+    return gltf2_blender_gather_material_displacement_texture_info_class.gather_material_displacement_texture_info_class(
+        (displacement,),
         export_settings)
 
 
