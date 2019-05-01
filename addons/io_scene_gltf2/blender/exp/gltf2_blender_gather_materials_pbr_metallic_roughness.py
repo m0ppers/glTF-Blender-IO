@@ -96,12 +96,10 @@ def __gather_base_color_texture(blender_material, export_settings):
         base_color_socket = gltf2_blender_get.get_socket_or_texture_slot(blender_material, "Background")
 
     alpha_socket = gltf2_blender_get.get_socket_or_texture_slot_old(blender_material, "Opacity")
-    if alpha_socket is not None:
+    if alpha_socket is not None and alpha_socket.is_linked:
         inputs = (base_color_socket, alpha_socket, )
     else:
         inputs = (base_color_socket,)
-
-    # inputs = (base_color_socket,)
 
     return gltf2_blender_gather_texture_info.gather_texture_info(inputs, export_settings)
 
