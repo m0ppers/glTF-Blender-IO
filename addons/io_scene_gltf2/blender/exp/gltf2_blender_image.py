@@ -101,11 +101,6 @@ class ExportImage:
     def encode(self, mime_type: Optional[str]) -> bytes:
         self.mime_type = mime_type
 
-        # All channels are white or undefined
-        # (I don't think this should happen...)
-        if all(isinstance(fill, FillWhite) for fill in self.fills.values()):
-            return self.__encode_blank()
-
         # Happy path = we can just use an existing Blender image
         if self.__on_happy_path():
             return self.__encode_happy()
@@ -118,64 +113,77 @@ class ExportImage:
             return self.__encode_from_image(fill.image)
 
     def __encode_unhappy(self) -> bytes:
-        # This will be a numpy array we fill in with pixel data.
-        result = None
-
-        img_fills = {
-            chan: fill
-            for chan, fill in self.fills.items()
-            if isinstance(fill, FillImage)
-        }
-        # Loop over images instead of dst_chans; ensures we only decode each
-        # image once even if it's used in multiple channels.
-        image_names = list(set(fill.image.name for fill in img_fills.values()))
-        for image_name in image_names:
-            image = bpy.data.images[image_name]
-
-            if result is None:
-                result = np.ones((image.size[0], image.size[1], 4), np.float32)
-            # Images should all be the same size (should be guaranteed by
-            # gather_texture_info).
-            assert (image.size[0], image.size[1]) == result.shape[:2]
-
-            # Slow and eats all your memory.
-            pixels = np.array(image.pixels[:])
-
-            pixels = pixels.reshape((image.size[0], image.size[1], image.channels))
-
-            for dst_chan, img_fill in img_fills.items():
-                if img_fill.image == image:
-                    result[:, :, dst_chan] = pixels[:, :, img_fill.src_chan]
-
-            pixels = None  # GC this please
-
-        return self.__encode_from_numpy_array(result)
-
-    def __encode_blank(self) -> bytes:
-        # 1x1 white image
-        pixels = np.array([1.0, 1.0, 1.0, 1.0])
-        pixels = pixels.reshape((1, 1, 4))
-        return self.__encode_from_numpy_array(pixels)
-
-    def __encode_from_numpy_array(self, array: np.ndarray) -> bytes:
-        tmp_image = None
+        tmp_scene = None
+        orig_colorspaces = {}
         try:
-            tmp_image = bpy.data.images.new(
-                "##gltf-export:tmp-image##",
-                width=array.shape[0],
-                height=array.shape[1],
-                alpha=Channel.A in self.fills,
+            # Create a Compositor nodetree on a temp scene that will
+            # construct the image described in self.fills. Think like...
+            #
+            #     [ Image ]--->[ Sep RGBA ]    [ Comb RGBA ]
+            #                  [  src_chan]--->[dst_chan   ]--->[ Output ]
+            #
+            # Then render the scene to a temp file and read it back. This is
+            # pretty hacky, but it's faster than doing this by manipulating
+            # pixels, at least for big images.
+            tmp_scene = bpy.data.scenes.new('##gltf-export:tmp-scene##')
+
+            tmp_scene.use_nodes = True
+            node_tree = tmp_scene.node_tree
+            for node in node_tree.nodes:
+                node_tree.nodes.remove(node)
+
+            size = None
+
+            out = node_tree.nodes.new('CompositorNodeComposite')
+            comb_rgba = node_tree.nodes.new('CompositorNodeCombRGBA')
+            comb_rgba.inputs[0].default_value = 1.0
+            comb_rgba.inputs[1].default_value = 1.0
+            comb_rgba.inputs[2].default_value = 1.0
+            comb_rgba.inputs[3].default_value = 1.0
+            node_tree.links.new(out.inputs['Image'], comb_rgba.outputs['Image'])
+
+            for dst_chan, fill in self.fills.items():
+                if isinstance(fill, FillImage):
+                    img = node_tree.nodes.new('CompositorNodeImage')
+                    img.image = fill.image
+                    sep_rgba = node_tree.nodes.new('CompositorNodeSepRGBA')
+                    node_tree.links.new(sep_rgba.inputs['Image'], img.outputs['Image'])
+                    node_tree.links.new(comb_rgba.inputs[dst_chan], sep_rgba.outputs[fill.src_chan])
+
+                    # Use Non-Color colorspace for all images and set the
+                    # display colorspace to 'None' below when we render.
+                    if fill.image.name not in orig_colorspaces:
+                        # Save the original value so we can put it back.
+                        orig_colorspace = fill.image.colorspace_settings.name
+                        orig_colorspaces[fill.image.name] = orig_colorspace
+                    fill.image.colorspace_settings.name = 'Non-Color'
+
+                    if size is None:
+                        size = (fill.image.size[0], fill.image.size[1])
+                    else:
+                        # All images should be the same size (should be
+                        # guaranteed by gather_texture_info)
+                        assert size == (fill.image.size[0], fill.image.size[1])
+
+            if size is None:
+                size = (1, 1)
+
+            return _render_tmp_scene(
+                tmp_scene=tmp_scene,
+                width=size[0],
+                height=size[1],
+                mime_type=self.mime_type,
+                colorspace='None',
+                has_alpha=Channel.A in self.fills,
             )
-            assert tmp_image.channels == 4  # 4 regardless of the alpha argument above.
-
-            # Also slow and eats all your memory.
-            tmp_image.pixels = array.flatten().tolist()
-
-            return self.__encode_from_image(tmp_image)
 
         finally:
-            if tmp_image is not None:
-                bpy.data.images.remove(tmp_image, do_unlink=True)
+            if tmp_scene is not None:
+                bpy.data.scenes.remove(tmp_scene, do_unlink=True)
+
+            # Restore original colorspace settings
+            for img_name, colorspace in orig_colorspaces.items():
+                bpy.data.images[img_name].colorspace_settings.name = colorspace
 
     def __encode_from_image(self, image: bpy.types.Image) -> bytes:
         file_format = {
@@ -210,3 +218,36 @@ class ExportImage:
 
             with open(tmpfilename, "rb") as f:
                 return f.read()
+
+
+def _render_tmp_scene(
+    tmp_scene, width, height, mime_type, colorspace, has_alpha,
+) -> bytes:
+    """Fill in render settings, render the scene to a file, and read back."""
+    tmp_scene.render.resolution_x = width
+    tmp_scene.render.resolution_y = height
+    tmp_scene.render.resolution_percentage = 100
+
+    if mime_type:
+        tmp_scene.render.image_settings.file_format = {
+            "image/jpeg": "JPEG",
+            "image/png": "PNG",
+        }.get(mime_type, "PNG")
+    tmp_scene.display_settings.display_device = colorspace
+    tmp_scene.render.image_settings.color_mode = 'RGBA' if has_alpha else 'RGB'
+    tmp_scene.render.dither_intensity = 0.0
+
+    # Turn off all metadata (stuff like use_stamp_date, etc.)
+    for attr in dir(tmp_scene.render):
+        if attr.startswith('use_stamp_'):
+            setattr(tmp_scene.render, attr, False)
+
+    with tempfile.TemporaryDirectory() as tmpdirname:
+        tmpfilename = tmpdirname + "/img"
+        tmp_scene.render.filepath = tmpfilename
+        tmp_scene.render.use_file_extension = False
+
+        bpy.ops.render.render(scene=tmp_scene.name, write_still=True)
+
+        with open(tmpfilename, "rb") as f:
+            return f.read()
