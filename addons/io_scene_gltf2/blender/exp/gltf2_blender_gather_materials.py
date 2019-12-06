@@ -128,6 +128,10 @@ def __gather_emissive_texture(blender_material, export_settings):
         emissive = gltf2_blender_get.get_socket_or_texture_slot_old(blender_material, "Emissive")
     return gltf2_blender_gather_texture_info.gather_texture_info((emissive,), export_settings)
 
+def __gather_shadow_texture(blender_material, export_settings):
+    shadow = gltf2_blender_get.get_socket_or_texture_slot_old(blender_material, "Shadow")
+    return gltf2_blender_gather_texture_info.gather_texture_info((shadow,), export_settings)
+
 
 def __gather_extensions(blender_material, export_settings):
     extensions = {}
@@ -139,6 +143,10 @@ def __gather_extensions(blender_material, export_settings):
         if gltf2_blender_get.get_socket_or_texture_slot(blender_material, "Background") is not None:
             extensions["KHR_materials_unlit"] = Extension("KHR_materials_unlit", {}, False)
 
+    shadow=__gather_shadow_texture(blender_material, export_settings)
+
+    if shadow is not None:
+        extensions["AA_shadow"] = Extension("AA_shadow", {"shadowTexture": shadow})
     # TODO specular glossiness extension
 
     return extensions if extensions else None

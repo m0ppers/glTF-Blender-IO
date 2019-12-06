@@ -733,6 +733,8 @@ class MaterialOcclusionTextureInfoClass:
         return result
 
 
+
+
 class MaterialPBRMetallicRoughness:
     """A set of parameter values that are used to define the metallic-roughness material model
     from Physically-Based Rendering (PBR) methodology. When not specified, all the default
@@ -808,6 +810,10 @@ class Material:
         emissive_texture = from_union([TextureInfo.from_dict, from_none], obj.get("emissiveTexture"))
         extensions = from_union([lambda x: from_dict(lambda x: from_dict(lambda x: x, x), x), from_none],
                                 obj.get("extensions"))
+
+        if extensions and "AA_shadow" in extensions:
+            extensions["AA_shadow"]["shadowTexture"] = from_union([TextureInfo.from_dict, from_none], extensions["AA_shadow"].get("shadowTexture"))
+        
         extras = obj.get("extras")
         name = from_union([from_str, from_none], obj.get("name"))
         normal_texture = from_union([MaterialNormalTextureInfoClass.from_dict, from_none], obj.get("normalTexture"))
@@ -825,8 +831,14 @@ class Material:
         result["doubleSided"] = from_union([from_bool, from_none], self.double_sided)
         result["emissiveFactor"] = from_union([lambda x: from_list(to_float, x), from_none], self.emissive_factor)
         result["emissiveTexture"] = from_union([lambda x: to_class(TextureInfo, x), from_none], self.emissive_texture)
-        result["extensions"] = from_union([lambda x: from_dict(lambda x: from_dict(lambda x: x, x), x), from_none],
+        
+        extensions = from_union([lambda x: from_dict(lambda x: from_dict(lambda x: x, x), x), from_none],
                                           self.extensions)
+
+        if extensions and "AA_shadow" in extensions:
+            extensions["AA_shadow"]["shadowTexture"] = from_union([lambda x: to_class(TextureInfo, x), from_none], extensions["AA_shadow"]["shadowTexture"])
+        
+        result["extensions"] = extensions
         result["extras"] = self.extras
         result["name"] = from_union([from_str, from_none], self.name)
         result["normalTexture"] = from_union([lambda x: to_class(MaterialNormalTextureInfoClass, x), from_none],
