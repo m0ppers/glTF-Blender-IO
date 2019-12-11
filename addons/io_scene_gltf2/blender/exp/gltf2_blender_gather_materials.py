@@ -146,7 +146,7 @@ def __gather_extensions(blender_material, export_settings):
     shadow=__gather_shadow_texture(blender_material, export_settings)
 
     if shadow is not None:
-        extensions["AA_shadow"] = Extension("AA_shadow", {"shadowTexture": shadow})
+        extensions["AA_shadow"] = Extension("AA_shadow", {"shadowTexture": shadow}, False)
     # TODO specular glossiness extension
 
     return extensions if extensions else None
