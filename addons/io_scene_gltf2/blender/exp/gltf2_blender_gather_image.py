@@ -159,11 +159,7 @@ def __get_image_data(sockets_or_slots, export_settings) -> ExportImage:
                 continue
 
             # rudimentarily try follow the node tree to find the correct image data.
-<<<<<<< HEAD
-            src_chan = 0
-=======
             src_chan = Channel.R
->>>>>>> blender-v2.82-release
             for elem in result.path:
                 if isinstance(elem.from_node, bpy.types.ShaderNodeSeparateRGB):
                    src_chan = {
