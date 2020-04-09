@@ -20,6 +20,7 @@ from io_scene_gltf2.io.com import gltf2_io
 from io_scene_gltf2.blender.exp import gltf2_blender_gather_primitives
 from ..com.gltf2_blender_extras import generate_extras
 from io_scene_gltf2.io.com.gltf2_io_debug import print_console
+from io_scene_gltf2.io.exp.gltf2_io_user_extensions import export_user_extensions
 
 
 @cached
@@ -38,13 +39,24 @@ def gather_mesh(blender_mesh: bpy.types.Mesh,
         extensions=__gather_extensions(blender_mesh, vertex_groups, modifiers, export_settings),
         extras=__gather_extras(blender_mesh, vertex_groups, modifiers, export_settings),
         name=__gather_name(blender_mesh, vertex_groups, modifiers, export_settings),
+        weights=__gather_weights(blender_mesh, vertex_groups, modifiers, export_settings),
         primitives=__gather_primitives(blender_mesh, blender_object, vertex_groups, modifiers, material_names, export_settings),
-        weights=__gather_weights(blender_mesh, vertex_groups, modifiers, export_settings)
     )
 
     if len(mesh.primitives) == 0:
         print_console("WARNING", "Mesh '{}' has no primitives and will be omitted.".format(mesh.name))
         return None
+
+    export_user_extensions('gather_mesh_hook',
+                           export_settings,
+                           mesh,
+                           blender_mesh,
+                           blender_object,
+                           vertex_groups,
+                           modifiers,
+                           skip_filter,
+                           material_names)
+
     return mesh
 
 
@@ -122,7 +134,6 @@ def __gather_weights(blender_mesh: bpy.types.Mesh,
                      modifiers: Optional[bpy.types.ObjectModifiers],
                      export_settings
                      ) -> Optional[List[float]]:
-
     if not export_settings[MORPH] or not blender_mesh.shape_keys:
         return None
 

@@ -26,6 +26,7 @@ from io_scene_gltf2.io.exp import gltf2_io_image_data
 from io_scene_gltf2.io.com import gltf2_io_debug
 from io_scene_gltf2.blender.exp.gltf2_blender_image import Channel, ExportImage
 from io_scene_gltf2.blender.exp.gltf2_blender_gather_cache import cached
+from io_scene_gltf2.io.exp.gltf2_io_user_extensions import export_user_extensions
 
 
 @cached
@@ -37,8 +38,8 @@ def gather_image(
         return None
 
     image_data = __get_image_data(blender_shader_sockets_or_texture_slots, export_settings)
-    if image_data is None:
-        # The blender image has no data
+    if image_data.empty():
+        # The export image has no data
         return None
 
     mime_type = __gather_mime_type(blender_shader_sockets_or_texture_slots, export_settings)
@@ -47,7 +48,7 @@ def gather_image(
     uri = __gather_uri(image_data, mime_type, name, export_settings)
     buffer_view = __gather_buffer_view(image_data, mime_type, name, export_settings)
 
-    return __make_image(
+    image = __make_image(
         buffer_view,
         __gather_extensions(blender_shader_sockets_or_texture_slots, export_settings),
         __gather_extras(blender_shader_sockets_or_texture_slots, export_settings),
@@ -56,6 +57,10 @@ def gather_image(
         uri,
         export_settings
     )
+
+    export_user_extensions('gather_image_hook', export_settings, image, blender_shader_sockets_or_texture_slots)
+
+    return image
 
 @cached
 def __make_image(buffer_view, extensions, extras, mime_type, name, uri, export_settings):
@@ -154,7 +159,11 @@ def __get_image_data(sockets_or_slots, export_settings) -> ExportImage:
                 continue
 
             # rudimentarily try follow the node tree to find the correct image data.
+<<<<<<< HEAD
             src_chan = 0
+=======
+            src_chan = Channel.R
+>>>>>>> blender-v2.82-release
             for elem in result.path:
                 if isinstance(elem.from_node, bpy.types.ShaderNodeSeparateRGB):
                    src_chan = {
@@ -162,6 +171,8 @@ def __get_image_data(sockets_or_slots, export_settings) -> ExportImage:
                         'G': Channel.G,
                         'B': Channel.B,
                     }[elem.from_socket.name]
+                if elem.from_socket.name == 'Alpha':
+                    src_chan = Channel.A
 
             dst_chan = None
 
