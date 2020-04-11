@@ -858,8 +858,8 @@ class Material:
         extensions = from_union([lambda x: from_dict(from_extension, x), from_none],
                                           self.extensions)
 
-        if extensions and "AA_shadow" in extensions:
-            extensions["AA_shadow"]["shadowTexture"] = from_union([lambda x: to_class(TextureInfo, x), from_none], extensions["AA_shadow"]["shadowTexture"])
+        if "AA_shadow" in self.extensions:
+            extensions["AA_shadow"]["shadowTexture"] = from_union([lambda x: to_class(TextureInfo, x), from_none], self.extensions["AA_shadow"]["shadowTexture"])
         
         result["extensions"] = extensions
         result["extras"] = from_extra(self.extras)
