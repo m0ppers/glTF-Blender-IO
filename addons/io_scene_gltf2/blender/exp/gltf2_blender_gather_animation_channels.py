@@ -21,6 +21,7 @@ from io_scene_gltf2.io.com import gltf2_io_debug
 from io_scene_gltf2.blender.exp.gltf2_blender_gather_cache import cached
 from io_scene_gltf2.blender.exp import gltf2_blender_gather_animation_samplers
 from io_scene_gltf2.blender.exp import gltf2_blender_gather_animation_channel_target
+from io_scene_gltf2.blender.exp import gltf2_blender_gather_animation_sampler_keyframes
 from io_scene_gltf2.blender.exp import gltf2_blender_get
 from io_scene_gltf2.blender.exp import gltf2_blender_gather_skins
 from io_scene_gltf2.blender.exp import gltf2_blender_gather_drivers
@@ -96,7 +97,8 @@ def gather_animation_channels(blender_action: bpy.types.Action,
 
 
         # Retrieve channels for drivers, if needed
-        drivers_to_manage = gltf2_blender_gather_drivers.get_sk_drivers(blender_object)
+        obj_driver = blender_object.proxy if blender_object.proxy else blender_object
+        drivers_to_manage = gltf2_blender_gather_drivers.get_sk_drivers(obj_driver)
         for obj, fcurves in drivers_to_manage:
             channel = __gather_animation_channel(
                 fcurves,
@@ -124,6 +126,8 @@ def gather_animation_channels(blender_action: bpy.types.Action,
     # resetting driver caches
     gltf2_blender_gather_drivers.get_sk_driver_values.reset_cache()
     gltf2_blender_gather_drivers.get_sk_drivers.reset_cache()
+    # resetting bone caches
+    gltf2_blender_gather_animation_sampler_keyframes.get_bone_matrix.reset_cache()
 
     return channels
 
@@ -187,25 +191,28 @@ def __gather_animation_channel(channels: typing.Tuple[bpy.types.FCurve],
     if not __filter_animation_channel(channels, blender_object, export_settings):
         return None
 
-    animation_channel = gltf2_io.AnimationChannel(
-        extensions=__gather_extensions(channels, blender_object, export_settings, bake_bone),
-        extras=__gather_extras(channels, blender_object, export_settings, bake_bone),
-        sampler=__gather_sampler(channels, blender_object, export_settings, bake_bone, bake_channel, bake_range_start, bake_range_end, action_name, driver_obj),
-        target=__gather_target(channels, blender_object, export_settings, bake_bone, bake_channel, driver_obj)
-    )
+    __target= __gather_target(channels, blender_object, export_settings, bake_bone, bake_channel, driver_obj)
+    if __target.path is not None:
+        animation_channel = gltf2_io.AnimationChannel(
+            extensions=__gather_extensions(channels, blender_object, export_settings, bake_bone),
+            extras=__gather_extras(channels, blender_object, export_settings, bake_bone),
+            sampler=__gather_sampler(channels, blender_object, export_settings, bake_bone, bake_channel, bake_range_start, bake_range_end, action_name, driver_obj),
+            target=__target
+        )
 
-    export_user_extensions('gather_animation_channel_hook',
-                           export_settings,
-                           animation_channel,
-                           channels,
-                           blender_object,
-                           bake_bone,
-                           bake_channel,
-                           bake_range_start,
-                           bake_range_end,
-                           action_name)
+        export_user_extensions('gather_animation_channel_hook',
+                               export_settings,
+                               animation_channel,
+                               channels,
+                               blender_object,
+                               bake_bone,
+                               bake_channel,
+                               bake_range_start,
+                               bake_range_end,
+                               action_name)
 
-    return animation_channel
+        return animation_channel
+    return None
 
 
 def __filter_animation_channel(channels: typing.Tuple[bpy.types.FCurve],

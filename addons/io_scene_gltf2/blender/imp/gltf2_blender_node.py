@@ -13,13 +13,12 @@
 # limitations under the License.
 
 import bpy
+from mathutils import Vector
 from ..com.gltf2_blender_extras import set_extras
 from .gltf2_blender_mesh import BlenderMesh
 from .gltf2_blender_camera import BlenderCamera
-from .gltf2_blender_skin import BlenderSkin
 from .gltf2_blender_light import BlenderLight
-from ..com.gltf2_blender_conversion import scale_to_matrix, matrix_gltf_to_blender, correction_rotation
-
+from .gltf2_blender_vnode import VNode
 
 class BlenderNode():
     """Blender Node."""
@@ -27,250 +26,220 @@ class BlenderNode():
         raise RuntimeError("%s should not be instantiated" % cls)
 
     @staticmethod
-    def create(gltf, node_idx, parent):
-        """Node creation."""
-        pynode = gltf.data.nodes[node_idx]
-
-        # Blender attributes initialization
-        pynode.blender_object = ""
-        pynode.parent = parent
+    def create_vnode(gltf, vnode_id):
+        """Create VNode and all its descendants."""
+        vnode = gltf.vnodes[vnode_id]
 
         gltf.display_current_node += 1
         if bpy.app.debug_value == 101:
-            gltf.log.critical("Node " + str(gltf.display_current_node) + " of " + str(gltf.display_total_nodes) + " (idx " + str(node_idx) + ")")
+            gltf.log.critical("Node %d of %d (id %s)", gltf.display_current_node, len(gltf.vnodes), vnode_id)
 
-        if pynode.mesh is not None:
+        if vnode.type == VNode.Object:
+            BlenderNode.create_object(gltf, vnode_id)
+            if vnode.is_arma:
+                BlenderNode.create_bones(gltf, vnode_id)
 
-            instance = False
-            if gltf.data.meshes[pynode.mesh].blender_name is not None:
-                # Mesh is already created, only create instance
-                # Except is current node is animated with path weight
-                # Or if previous instance is animation at node level
-                if pynode.weight_animation is True:
-                    instance = False
-                else:
-                    if gltf.data.meshes[pynode.mesh].is_weight_animated is True:
-                        instance = False
-                    else:
-                        instance = True
-                        mesh = bpy.data.meshes[gltf.data.meshes[pynode.mesh].blender_name]
+        elif vnode.type == VNode.Bone:
+            # These are created with their armature
+            pass
 
-            if instance is False:
-                if pynode.name:
-                    gltf.log.info("Blender create Mesh node " + pynode.name)
-                else:
-                    gltf.log.info("Blender create Mesh node")
+        elif vnode.type == VNode.DummyRoot:
+            # Don't actually create this
+            vnode.blender_object = None
 
-                mesh = BlenderMesh.create(gltf, pynode.mesh, node_idx, parent)
+        for child in vnode.children:
+            BlenderNode.create_vnode(gltf, child)
 
-            if pynode.weight_animation is True:
-                # flag this mesh instance as created only for this node, because of weight animation
-                gltf.data.meshes[pynode.mesh].is_weight_animated = True
+    @staticmethod
+    def create_object(gltf, vnode_id):
+        vnode = gltf.vnodes[vnode_id]
 
-            if pynode.name:
-                name = pynode.name
-            else:
-                # Take mesh name if exist
-                if gltf.data.meshes[pynode.mesh].name:
-                    name = gltf.data.meshes[pynode.mesh].name
-                else:
-                    name = "Object_" + str(node_idx)
+        if vnode.mesh_node_idx is not None:
+            obj = BlenderNode.create_mesh_object(gltf, vnode)
 
-            obj = bpy.data.objects.new(name, mesh)
-            set_extras(obj, pynode.extras)
-            obj.rotation_mode = 'QUATERNION'
-            if bpy.app.version < (2, 80, 0):
-                bpy.data.scenes[gltf.blender_scene].objects.link(obj)
-            else:
-                if gltf.blender_active_collection is not None:
-                    bpy.data.collections[gltf.blender_active_collection].objects.link(obj)
-                else:
-                    bpy.data.scenes[gltf.blender_scene].collection.objects.link(obj)
+        elif vnode.camera_node_idx is not None:
+            pynode = gltf.data.nodes[vnode.camera_node_idx]
+            cam = BlenderCamera.create(gltf, pynode.camera)
+            name = vnode.name or cam.name
+            obj = bpy.data.objects.new(name, cam)
 
-            # Transforms apply only if this mesh is not skinned
-            # See implementation node of gltf2 specification
-            if not (pynode.mesh is not None and pynode.skin is not None):
-                BlenderNode.set_transforms(gltf, node_idx, pynode, obj, parent)
-            pynode.blender_object = obj.name
-            BlenderNode.set_parent(gltf, obj, parent)
+        elif vnode.light_node_idx is not None:
+            pynode = gltf.data.nodes[vnode.light_node_idx]
+            light = BlenderLight.create(gltf, pynode.extensions['KHR_lights_punctual']['light'])
+            name = vnode.name or light.name
+            obj = bpy.data.objects.new(name, light)
 
-            if instance == False:
-                BlenderMesh.set_mesh(gltf, gltf.data.meshes[pynode.mesh], mesh, obj)
+        elif vnode.is_arma:
+            armature = bpy.data.armatures.new(vnode.arma_name)
+            name = vnode.name or armature.name
+            obj = bpy.data.objects.new(name, armature)
 
-            if pynode.children:
-                for child_idx in pynode.children:
-                    BlenderNode.create(gltf, child_idx, node_idx)
-
-            return
-
-        if pynode.camera is not None:
-            if pynode.name:
-                gltf.log.info("Blender create Camera node " + pynode.name)
-            else:
-                gltf.log.info("Blender create Camera node")
-            obj = BlenderCamera.create(gltf, pynode.camera)
-            set_extras(obj, pynode.extras)
-            BlenderNode.set_transforms(gltf, node_idx, pynode, obj, parent)  # TODO default rotation of cameras ?
-            pynode.blender_object = obj.name
-            BlenderNode.set_parent(gltf, obj, parent)
-
-            if pynode.children:
-                for child_idx in pynode.children:
-                    BlenderNode.create(gltf, child_idx, node_idx)
-
-            return
-
-        if pynode.is_joint:
-            if pynode.name:
-                gltf.log.info("Blender create Bone node " + pynode.name)
-            else:
-                gltf.log.info("Blender create Bone node")
-            # Check if corresponding armature is already created, create it if needed
-            if gltf.data.skins[pynode.skin_id].blender_armature_name is None:
-                BlenderSkin.create_armature(gltf, pynode.skin_id, parent)
-
-            BlenderSkin.create_bone(gltf, pynode.skin_id, node_idx, parent)
-
-            if pynode.children:
-                for child_idx in pynode.children:
-                    BlenderNode.create(gltf, child_idx, node_idx)
-
-            return
-
-        if pynode.extensions is not None:
-            if 'KHR_lights_punctual' in pynode.extensions.keys():
-                obj = BlenderLight.create(gltf, pynode.extensions['KHR_lights_punctual']['light'])
-                set_extras(obj, pynode.extras)
-                obj.rotation_mode = 'QUATERNION'
-                BlenderNode.set_transforms(gltf, node_idx, pynode, obj, parent, correction=True)
-                pynode.blender_object = obj.name
-                pynode.correction_needed = True
-                BlenderNode.set_parent(gltf, obj, parent)
-
-                if pynode.children:
-                    for child_idx in pynode.children:
-                        BlenderNode.create(gltf, child_idx, node_idx)
-
-                return
-
-        # No mesh, no camera, no light. For now, create empty #TODO
-
-        if pynode.name:
-            gltf.log.info("Blender create Empty node " + pynode.name)
-            obj = bpy.data.objects.new(pynode.name, None)
         else:
-            gltf.log.info("Blender create Empty node")
-            obj = bpy.data.objects.new("Node", None)
-        set_extras(obj, pynode.extras)
+            name = vnode.name or vnode.default_name
+            obj = bpy.data.objects.new(name, None)
+
+        vnode.blender_object = obj
+
+        # Set extras (if came from a glTF node)
+        if isinstance(vnode_id, int):
+            pynode = gltf.data.nodes[vnode_id]
+            set_extras(obj, pynode.extras)
+
+        # Set transform
+        trans, rot, scale = vnode.trs()
+        obj.location = trans
         obj.rotation_mode = 'QUATERNION'
-        if bpy.app.version < (2, 80, 0):
-            bpy.data.scenes[gltf.blender_scene].objects.link(obj)
+        obj.rotation_quaternion = rot
+        obj.scale = scale
+
+        # Set parent
+        if vnode.parent is not None:
+            parent_vnode = gltf.vnodes[vnode.parent]
+            if parent_vnode.type == VNode.Object:
+                obj.parent = parent_vnode.blender_object
+            elif parent_vnode.type == VNode.Bone:
+                arma_vnode = gltf.vnodes[parent_vnode.bone_arma]
+                obj.parent = arma_vnode.blender_object
+                obj.parent_type = 'BONE'
+                obj.parent_bone = parent_vnode.blender_bone_name
+
+                # Nodes with a bone parent need to be translated
+                # backwards from the tip to the root
+                obj.location += Vector((0, -parent_vnode.bone_length, 0))
+
+        bpy.data.scenes[gltf.blender_scene].collection.objects.link(obj)
+
+        return obj
+
+    @staticmethod
+    def create_bones(gltf, arma_id):
+        arma = gltf.vnodes[arma_id]
+        blender_arma = arma.blender_object
+        armature = blender_arma.data
+
+        # Find all bones for this arma
+        bone_ids = []
+        def visit(id):  # Depth-first walk
+            if gltf.vnodes[id].type == VNode.Bone:
+                bone_ids.append(id)
+                for child in gltf.vnodes[id].children:
+                    visit(child)
+        for child in arma.children:
+            visit(child)
+
+        # Switch into edit mode to create all edit bones
+
+        if bpy.context.mode != 'OBJECT':
+            bpy.ops.object.mode_set(mode='OBJECT')
+        bpy.context.window.scene = bpy.data.scenes[gltf.blender_scene]
+        bpy.context.view_layer.objects.active = blender_arma
+        bpy.ops.object.mode_set(mode="EDIT")
+
+        for id in bone_ids:
+            vnode = gltf.vnodes[id]
+            editbone = armature.edit_bones.new(vnode.name or vnode.default_name)
+            vnode.blender_bone_name = editbone.name
+            editbone.use_connect = False  # TODO?
+
+            # Give the position of the bone in armature space
+            arma_mat = vnode.editbone_arma_mat
+            editbone.head = arma_mat @ Vector((0, 0, 0))
+            editbone.tail = arma_mat @ Vector((0, 1, 0))
+            editbone.align_roll(arma_mat @ Vector((0, 0, 1)) - editbone.head)
+            editbone.length = vnode.bone_length
+
+            if isinstance(id, int):
+                pynode = gltf.data.nodes[id]
+                set_extras(editbone, pynode.extras)
+
+        # Set all bone parents
+        for id in bone_ids:
+            vnode = gltf.vnodes[id]
+            parent_vnode = gltf.vnodes[vnode.parent]
+            if parent_vnode.type == VNode.Bone:
+                editbone = armature.edit_bones[vnode.blender_bone_name]
+                parent_editbone = armature.edit_bones[parent_vnode.blender_bone_name]
+                editbone.parent = parent_editbone
+
+        # Switch back to object mode and do pose bones
+        bpy.ops.object.mode_set(mode="OBJECT")
+
+        for id in bone_ids:
+            vnode = gltf.vnodes[id]
+            pose_bone = blender_arma.pose.bones[vnode.blender_bone_name]
+
+            # BoneTRS = EditBone * PoseBone
+            # Set PoseBone to make BoneTRS = vnode.trs.
+            t, r, s = vnode.trs()
+            et, er = vnode.editbone_trans, vnode.editbone_rot
+            pose_bone.location = er.conjugated() @ (t - et)
+            pose_bone.rotation_mode = 'QUATERNION'
+            pose_bone.rotation_quaternion = er.conjugated() @ r
+            pose_bone.scale = s
+
+            if isinstance(id, int):
+                pynode = gltf.data.nodes[id]
+                set_extras(pose_bone, pynode.extras)
+
+    @staticmethod
+    def create_mesh_object(gltf, vnode):
+        pynode = gltf.data.nodes[vnode.mesh_node_idx]
+        pymesh = gltf.data.meshes[pynode.mesh]
+
+        # Key to cache the Blender mesh by.
+        # Same cache key = instances of the same Blender mesh.
+        cache_key = None
+        if not pymesh.shapekey_names:
+            cache_key = (pynode.skin,)
         else:
-            if gltf.blender_active_collection is not None:
-                bpy.data.collections[gltf.blender_active_collection].objects.link(obj)
+            # Unlike glTF, all instances of a Blender mesh share shapekeys.
+            # So two instances that might have different morph weights need
+            # different cache keys.
+            if pynode.weight_animation is False:
+                cache_key = (pynode.skin, tuple(pynode.weights or []))
             else:
-                bpy.data.scenes[gltf.blender_scene].collection.objects.link(obj)
+                cache_key = None  # don't use the cache at all
 
-        BlenderNode.set_transforms(gltf, node_idx, pynode, obj, parent)
-        pynode.blender_object = obj.name
-        BlenderNode.set_parent(gltf, obj, parent)
+        if cache_key is not None and cache_key in pymesh.blender_name:
+            mesh = bpy.data.meshes[pymesh.blender_name[cache_key]]
+        else:
+            gltf.log.info("Blender create Mesh node %s", pymesh.name or pynode.mesh)
+            mesh = BlenderMesh.create(gltf, pynode.mesh, pynode.skin)
+            if cache_key is not None:
+                pymesh.blender_name[cache_key] = mesh.name
 
-        if pynode.children:
-            for child_idx in pynode.children:
-                BlenderNode.create(gltf, child_idx, node_idx)
+        name = vnode.name or mesh.name
+        obj = bpy.data.objects.new(name, mesh)
 
-    @staticmethod
-    def set_parent(gltf, obj, parent):
-        """Set parent."""
-        if parent is None:
-            return
+        if pymesh.shapekey_names:
+            BlenderNode.set_morph_weights(gltf, pynode, obj)
 
-        for node_idx, node in enumerate(gltf.data.nodes):
-            if node_idx == parent:
-                if node.is_joint is True:
-                    bpy.ops.object.select_all(action='DESELECT')
-                    if bpy.app.version < (2, 80, 0):
-                        bpy.data.objects[node.blender_armature_name].select = True
-                        bpy.context.scene.objects.active = bpy.data.objects[node.blender_armature_name]
-                    else:
-                        bpy.data.objects[node.blender_armature_name].select_set(True)
-                        bpy.context.view_layer.objects.active = bpy.data.objects[node.blender_armature_name]
+        if pynode.skin is not None:
+            BlenderNode.setup_skinning(gltf, pynode, obj)
 
-                    bpy.ops.object.mode_set(mode='EDIT')
-                    bpy.data.objects[node.blender_armature_name].data.edit_bones.active = \
-                        bpy.data.objects[node.blender_armature_name].data.edit_bones[node.blender_bone_name]
-                    bpy.ops.object.mode_set(mode='OBJECT')
-                    bpy.ops.object.select_all(action='DESELECT')
-                    if bpy.app.version < (2, 80, 0):
-                        obj.select = True
-                        bpy.data.objects[node.blender_armature_name].select = True
-                        bpy.context.scene.objects.active = bpy.data.objects[node.blender_armature_name]
-                        bpy.context.scene.update()
-                    else:
-                        obj.select_set(True)
-                        bpy.data.objects[node.blender_armature_name].select_set(True)
-                        bpy.context.view_layer.objects.active = bpy.data.objects[node.blender_armature_name]
-                        bpy.context.view_layer.update()
-                    bpy.ops.object.parent_set(type='BONE_RELATIVE', keep_transform=True)
-                    # From world transform to local (-armature transform -bone transform)
-                    bone_trans = bpy.data.objects[node.blender_armature_name] \
-                        .pose.bones[node.blender_bone_name].matrix.to_translation().copy()
-                    bone_rot = bpy.data.objects[node.blender_armature_name] \
-                        .pose.bones[node.blender_bone_name].matrix.to_quaternion().copy()
-                    bone_scale_mat = scale_to_matrix(node.blender_bone_matrix.to_scale())
-                    if bpy.app.version < (2, 80, 0):
-                        obj.location = bone_scale_mat * obj.location
-                        obj.location = bone_rot * obj.location
-                        obj.location += bone_trans
-                        obj.location = bpy.data.objects[node.blender_armature_name].matrix_world.to_quaternion() \
-                            * obj.location
-                        obj.rotation_quaternion = obj.rotation_quaternion \
-                            * bpy.data.objects[node.blender_armature_name].matrix_world.to_quaternion()
-                        obj.scale = bone_scale_mat * obj.scale
-                    else:
-                        obj.location = bone_scale_mat @ obj.location
-                        obj.location = bone_rot @ obj.location
-                        obj.location += bone_trans
-                        obj.location = bpy.data.objects[node.blender_armature_name].matrix_world.to_quaternion() \
-                            @ obj.location
-                        obj.rotation_quaternion = obj.rotation_quaternion \
-                            @ bpy.data.objects[node.blender_armature_name].matrix_world.to_quaternion()
-                        obj.scale = bone_scale_mat @ obj.scale
-
-                    return
-                if node.blender_object:
-                    obj.parent = bpy.data.objects[node.blender_object]
-                    return
-
-        gltf.log.error("ERROR, parent not found")
+        return obj
 
     @staticmethod
-    def set_transforms(gltf, node_idx, pynode, obj, parent, correction=False):
-        """Set transforms."""
-        if parent is None:
-            obj.matrix_world = matrix_gltf_to_blender(pynode.transform)
-            if correction is True:
-                if bpy.app.version < (2, 80, 0):
-                    obj.matrix_world = obj.matrix_world * correction_rotation()
-                else:
-                    obj.matrix_world = obj.matrix_world @ correction_rotation()
-            return
+    def set_morph_weights(gltf, pynode, obj):
+        pymesh = gltf.data.meshes[pynode.mesh]
+        weights = pynode.weights or pymesh.weights or []
+        for i, weight in enumerate(weights):
+            if pymesh.shapekey_names[i] is not None:
+                obj.data.shape_keys.key_blocks[pymesh.shapekey_names[i]].value = weight
 
-        for idx, node in enumerate(gltf.data.nodes):
-            if idx == parent:
-                if node.is_joint is True:
-                    obj.matrix_world = matrix_gltf_to_blender(pynode.transform)
-                    if correction is True:
-                        if bpy.app.version < (2, 80, 0):
-                            obj.matrix_world = obj.matrix_world * correction_rotation()
-                        else:
-                            obj.matrix_world = obj.matrix_world @ correction_rotation()
-                    return
-                else:
-                    if correction is True:
-                        if bpy.app.version < (2, 80, 0):
-                            obj.matrix_world = obj.matrix_world * correction_rotation()
-                        else:
-                            obj.matrix_world = obj.matrix_world @ correction_rotation()
-                    obj.matrix_world = matrix_gltf_to_blender(pynode.transform)
-                    return
+    @staticmethod
+    def setup_skinning(gltf, pynode, obj):
+        pyskin = gltf.data.skins[pynode.skin]
+
+        # Armature/bones should have already been created.
+
+        # Create vertex groups for each joint
+        for node_idx in pyskin.joints:
+            bone = gltf.vnodes[node_idx]
+            obj.vertex_groups.new(name=bone.blender_bone_name)
+
+        # Create an Armature modifier
+        first_bone = gltf.vnodes[pyskin.joints[0]]
+        arma = gltf.vnodes[first_bone.bone_arma]
+        mod = obj.modifiers.new(name="Armature", type="ARMATURE")
+        mod.object = arma.blender_object

@@ -18,7 +18,7 @@ import logging
 import json
 import struct
 import base64
-from os.path import dirname, join, isfile, basename
+from os.path import dirname, join, isfile
 from urllib.parse import unquote
 
 
@@ -39,10 +39,6 @@ class glTFImporter():
         log = Log(import_settings['loglevel'])
         self.log = log.logger
         self.log_handler = log.hdlr
-
-        self.SIMPLE = 1
-        self.TEXTURE = 2
-        self.TEXTURE_FACTOR = 3
 
         # TODO: move to a com place?
         self.extensions_managed = [
@@ -174,23 +170,12 @@ class glTFImporter():
             self.content = None
             return success, txt
 
-    def is_node_joint(self, node_idx):
-        """Check if node is a joint."""
-        if not self.data.skins:  # if no skin in gltf file
-            return False, None
-
-        for skin_idx, skin in enumerate(self.data.skins):
-            if node_idx in skin.joints:
-                return True, skin_idx
-
-        return False, None
-
     def load_buffer(self, buffer_idx):
         """Load buffer."""
         buffer = self.data.buffers[buffer_idx]
 
         if buffer.uri:
-            data, _file_name = self.load_uri(buffer.uri)
+            data = self.load_uri(buffer.uri)
             if data is not None:
                 self.buffers[buffer_idx] = data
 
@@ -200,20 +185,18 @@ class glTFImporter():
                 self.buffers[buffer_idx] = self.glb_buffer
 
     def load_uri(self, uri):
-        """Loads a URI.
-        Returns the data and the filename of the resource, if there is one.
-        """
+        """Loads a URI."""
         sep = ';base64,'
         if uri.startswith('data:'):
             idx = uri.find(sep)
             if idx != -1:
                 data = uri[idx + len(sep):]
-                return memoryview(base64.b64decode(data)), None
+                return memoryview(base64.b64decode(data))
 
         path = join(dirname(self.filename), unquote(uri))
         try:
             with open(path, 'rb') as f_:
-                return memoryview(f_.read()), basename(path)
+                return memoryview(f_.read())
         except Exception:
             self.log.error("Couldn't read file: " + path)
-            return None, None
+            return None

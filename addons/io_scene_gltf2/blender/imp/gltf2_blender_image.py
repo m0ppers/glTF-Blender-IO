@@ -15,8 +15,9 @@
 import bpy
 import os
 import tempfile
-from os.path import dirname, join, isfile, basename
-from urllib.parse import unquote
+from os.path import dirname, join, isfile, basename, normpath
+import urllib.parse
+import re
 
 from ...io.imp.gltf2_io_binary import BinaryData
 
@@ -28,77 +29,63 @@ class BlenderImage():
         raise RuntimeError("%s should not be instantiated" % cls)
 
     @staticmethod
-    def get_image_path(gltf, img_idx):
-        """Return image path."""
-        pyimage = gltf.data.images[img_idx]
-
-        image_name = "Image_" + str(img_idx)
-
-        if pyimage.uri:
-            sep = ';base64,'
-            if pyimage.uri[:5] == 'data:':
-                idx = pyimage.uri.find(sep)
-                if idx != -1:
-                    return False, None, None
-
-            if isfile(join(dirname(gltf.filename), unquote(pyimage.uri))):
-                return True, join(dirname(gltf.filename), unquote(pyimage.uri)), basename(join(dirname(gltf.filename), unquote(pyimage.uri)))
-            else:
-                gltf.log.error("Missing file (index " + str(img_idx) + "): " + pyimage.uri)
-                return False, None, None
-
-        if pyimage.buffer_view is None:
-            return False, None, None
-
-        return False, None, None
-
-    @staticmethod
     def create(gltf, img_idx):
         """Image creation."""
         img = gltf.data.images[img_idx]
+        img_name = img.name
 
         if img.blender_image_name is not None:
             # Image is already used somewhere
             return
 
-        if gltf.import_settings['import_pack_images'] is False:
+        tmp_dir = None
+        try:
+            if img.uri is not None and not img.uri.startswith('data:'):
+                # Image stored in a file
+                img_from_file = True
+                path = join(dirname(gltf.filename), _uri_to_path(img.uri))
+                img_name = img_name or basename(path)
+                if not isfile(path):
+                    gltf.log.error("Missing file (index " + str(img_idx) + "): " + img.uri)
+                    return
+            else:
+                # Image stored as data => create a tempfile, pack, and delete file
+                img_from_file = False
+                img_data = BinaryData.get_image_data(gltf, img_idx)
+                if img_data is None:
+                    return
+                img_name = img_name or 'Image_%d' % img_idx
+                tmp_dir = tempfile.TemporaryDirectory(prefix='gltfimg-')
+                filename = _filenamify(img_name) or 'Image_%d' % img_idx
+                filename += _img_extension(img)
+                path = join(tmp_dir.name, filename)
+                with open(path, 'wb') as f:
+                    f.write(img_data)
 
-            # Images are not packed (if image is a real file)
-            real, path, img_name = BlenderImage.get_image_path(gltf, img_idx)
-
-            if real is True:
-
-                # Check if image is already loaded
-                for img_ in bpy.data.images:
-                    if img_.filepath == path:
-                        # Already loaded, not needed to reload it
-                        img.blender_image_name = img_.name
-                        return
-
-                blender_image = bpy.data.images.load(path)
+            num_images = len(bpy.data.images)
+            blender_image = bpy.data.images.load(os.path.abspath(path), check_existing=img_from_file)
+            if len(bpy.data.images) != num_images:  # If created a new image
                 blender_image.name = img_name
-                img.blender_image_name = blender_image.name
-                return
+                if gltf.import_settings['import_pack_images'] or not img_from_file:
+                    blender_image.pack()
 
-        # Check if the file is already loaded (packed file)
-        file_creation_needed = True
-        for img_ in bpy.data.images:
-            if hasattr(img_, "gltf_index") and img_['gltf_index'] == img_idx:
-                file_creation_needed = False
-                img.blender_image_name = img_.name
-                break
+            img.blender_image_name = blender_image.name
 
-        if file_creation_needed is True:
-            # Create a temp image, pack, and delete image
-            tmp_image = tempfile.NamedTemporaryFile(delete=False)
-            img_data, img_name = BinaryData.get_image_data(gltf, img_idx)
-            if img_data is not None:
-                tmp_image.write(img_data)
-                tmp_image.close()
+        finally:
+            if tmp_dir is not None:
+                tmp_dir.cleanup()
 
-                blender_image = bpy.data.images.load(tmp_image.name)
-                blender_image.pack()
-                blender_image.name = img_name
-                img.blender_image_name = blender_image.name
-                blender_image['gltf_index'] = img_idx
-                os.remove(tmp_image.name)
+def _uri_to_path(uri):
+    uri = urllib.parse.unquote(uri)
+    return normpath(uri)
+
+def _img_extension(img):
+    if img.mime_type == 'image/png':
+        return '.png'
+    if img.mime_type == 'image/jpeg':
+        return '.jpg'
+    return ''
+
+def _filenamify(s):
+    s = s.strip().replace(' ', '_')
+    return re.sub(r'(?u)[^-\w.]', '', s)

@@ -36,19 +36,24 @@ class BlenderCamera():
         if pycamera.type == "orthographic":
             cam.type = "ORTHO"
 
-        # TODO: lot's of work for camera here...
-        if hasattr(pycamera, "znear"):
-            cam.clip_start = pycamera.znear
+            # TODO: xmag/ymag
 
-        if hasattr(pycamera, "zfar"):
-            cam.clip_end = pycamera.zfar
+            cam.clip_start = pycamera.orthographic.znear
+            cam.clip_end = pycamera.orthographic.zfar
 
-        obj = bpy.data.objects.new(pycamera.name, cam)
-        if bpy.app.version < (2, 80, 0):
-            bpy.data.scenes[gltf.blender_scene].objects.link(obj)
         else:
-            if gltf.blender_active_collection is not None:
-                bpy.data.collections[gltf.blender_active_collection].objects.link(obj)
+            cam.angle_y = pycamera.perspective.yfov
+            cam.lens_unit = "FOV"
+            cam.sensor_fit = "VERTICAL"
+
+            # TODO: fov/aspect ratio
+
+            cam.clip_start = pycamera.perspective.znear
+            if pycamera.perspective.zfar is not None:
+                cam.clip_end = pycamera.perspective.zfar
             else:
-                bpy.data.scenes[gltf.blender_scene].collection.objects.link(obj)
-        return obj
+                # Infinite projection
+                cam.clip_end = 1e12  # some big number
+
+
+        return cam

@@ -16,7 +16,7 @@ import json
 import bpy
 
 from ...io.imp.gltf2_io_binary import BinaryData
-from .gltf2_blender_animation_utils import simulate_stash, make_fcurve
+from .gltf2_blender_animation_utils import make_fcurve
 
 
 class BlenderWeightAnim():
@@ -25,10 +25,16 @@ class BlenderWeightAnim():
         raise RuntimeError("%s should not be instantiated" % cls)
 
     @staticmethod
-    def anim(gltf, anim_idx, node_idx):
+    def anim(gltf, anim_idx, vnode_id):
         """Manage animation."""
+        vnode = gltf.vnodes[vnode_id]
+
+        node_idx = vnode.mesh_node_idx
+        if node_idx is None:
+            return
+
         node = gltf.data.nodes[node_idx]
-        obj = bpy.data.objects[node.blender_object]
+        obj = vnode.blender_object
         fps = bpy.context.scene.render.fps
 
         animation = gltf.data.animations[anim_idx]
@@ -46,11 +52,7 @@ class BlenderWeightAnim():
         name = animation.track_name + "_" + obj.name
         action = bpy.data.actions.new(name)
         action.id_root = "KEY"
-        gltf.needs_stash.append((obj.data.shape_keys, animation.track_name, action))
-
-        if not obj.data.shape_keys.animation_data:
-            obj.data.shape_keys.animation_data_create()
-        obj.data.shape_keys.animation_data.action = action
+        gltf.needs_stash.append((obj.data.shape_keys, action))
 
         keys = BinaryData.get_data_from_accessor(gltf, animation.samplers[channel.sampler].input)
         values = BinaryData.get_data_from_accessor(gltf, animation.samplers[channel.sampler].output)

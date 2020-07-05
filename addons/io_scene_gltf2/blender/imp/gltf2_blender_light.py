@@ -28,31 +28,23 @@ class BlenderLight():
         """Light creation."""
         pylight = gltf.data.extensions['KHR_lights_punctual']['lights'][light_id]
         if pylight['type'] == "directional":
-            obj = BlenderLight.create_directional(gltf, light_id)
+            light = BlenderLight.create_directional(gltf, light_id)
         elif pylight['type'] == "point":
-            obj = BlenderLight.create_point(gltf, light_id)
+            light = BlenderLight.create_point(gltf, light_id)
         elif pylight['type'] == "spot":
-            obj = BlenderLight.create_spot(gltf, light_id)
+            light = BlenderLight.create_spot(gltf, light_id)
 
         if 'color' in pylight.keys():
-            obj.data.color = pylight['color']
+            light.color = pylight['color']
 
         if 'intensity' in pylight.keys():
-            obj.data.energy = pylight['intensity']
+            light.energy = pylight['intensity']
 
         # TODO range
 
-        if bpy.app.version < (2, 80, 0):
-            bpy.data.scenes[gltf.blender_scene].objects.link(obj)
-        else:
-            if gltf.blender_active_collection is not None:
-                bpy.data.collections[gltf.blender_active_collection].objects.link(obj)
-            else:
-                bpy.data.scenes[gltf.blender_scene].collection.objects.link(obj)
+        set_extras(light, pylight.get('extras'))
 
-        set_extras(obj.data, pylight.get('extras'))
-
-        return obj
+        return light
 
     @staticmethod
     def create_directional(gltf, light_id):
@@ -61,12 +53,8 @@ class BlenderLight():
         if 'name' not in pylight.keys():
             pylight['name'] = "Sun"
 
-        if bpy.app.version < (2, 80, 0):
-            sun = bpy.data.lamps.new(name=pylight['name'], type="SUN")
-        else:
-            sun = bpy.data.lights.new(name=pylight['name'], type="SUN")
-        obj = bpy.data.objects.new(pylight['name'], sun)
-        return obj
+        sun = bpy.data.lights.new(name=pylight['name'], type="SUN")
+        return sun
 
     @staticmethod
     def create_point(gltf, light_id):
@@ -75,12 +63,8 @@ class BlenderLight():
         if 'name' not in pylight.keys():
             pylight['name'] = "Point"
 
-        if bpy.app.version < (2, 80, 0):
-            point = bpy.data.lamps.new(name=pylight['name'], type="POINT")
-        else:
-            point = bpy.data.lights.new(name=pylight['name'], type="POINT")
-        obj = bpy.data.objects.new(pylight['name'], point)
-        return obj
+        point = bpy.data.lights.new(name=pylight['name'], type="POINT")
+        return point
 
     @staticmethod
     def create_spot(gltf, light_id):
@@ -89,11 +73,7 @@ class BlenderLight():
         if 'name' not in pylight.keys():
             pylight['name'] = "Spot"
 
-        if bpy.app.version < (2, 80, 0):
-            spot = bpy.data.lamps.new(name=pylight['name'], type="SPOT")
-        else:
-            spot = bpy.data.lights.new(name=pylight['name'], type="SPOT")
-        obj = bpy.data.objects.new(pylight['name'], spot)
+        spot = bpy.data.lights.new(name=pylight['name'], type="SPOT")
 
         # Angles
         if 'spot' in pylight.keys() and 'outerConeAngle' in pylight['spot']:
@@ -106,4 +86,4 @@ class BlenderLight():
         else:
             spot.spot_blend = 1.0
 
-        return obj
+        return spot

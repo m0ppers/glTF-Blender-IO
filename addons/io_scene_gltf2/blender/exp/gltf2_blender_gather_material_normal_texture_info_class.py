@@ -18,7 +18,6 @@ from io_scene_gltf2.blender.exp.gltf2_blender_gather_cache import cached
 from io_scene_gltf2.io.com import gltf2_io
 from io_scene_gltf2.blender.exp import gltf2_blender_gather_texture
 from io_scene_gltf2.blender.exp import gltf2_blender_search_node_tree
-from io_scene_gltf2.blender.exp import gltf2_blender_export_keys
 from io_scene_gltf2.blender.exp import gltf2_blender_get
 from io_scene_gltf2.io.com.gltf2_io_extensions import Extension
 from io_scene_gltf2.io.exp.gltf2_io_user_extensions import export_user_extensions
@@ -123,10 +122,7 @@ def __gather_tex_coord(blender_shader_sockets_or_texture_slots, export_settings)
 
         # Try to gather map index.
         for blender_mesh in bpy.data.meshes:
-            if bpy.app.version < (2, 80, 0):
-                texCoordIndex = blender_mesh.uv_textures.find(input_node.uv_map)
-            else:
-                texCoordIndex = blender_mesh.uv_layers.find(input_node.uv_map)
+            texCoordIndex = blender_mesh.uv_layers.find(input_node.uv_map)
             if texCoordIndex >= 0:
                 return texCoordIndex
 

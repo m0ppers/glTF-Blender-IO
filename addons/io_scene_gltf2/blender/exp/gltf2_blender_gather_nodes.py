@@ -29,9 +29,10 @@ from ..com.gltf2_blender_extras import generate_extras
 from io_scene_gltf2.io.com import gltf2_io
 from io_scene_gltf2.io.com import gltf2_io_extensions
 from io_scene_gltf2.io.exp.gltf2_io_user_extensions import export_user_extensions
+from io_scene_gltf2.io.com.gltf2_io_debug import print_console
 
 
-def gather_node(blender_object, blender_scene, export_settings):
+def gather_node(blender_object, library, blender_scene, dupli_object_parent, export_settings):
     # custom cache to avoid cache miss when called from animation
     # with blender_scene=None
 
@@ -40,15 +41,15 @@ def gather_node(blender_object, blender_scene, export_settings):
         gather_node.__cache = {}
         gather_node.__export_settings = export_settings
 
-    if blender_scene is None and blender_object.name in gather_node.__cache:
-        return gather_node.__cache[blender_object.name]
+    if blender_scene is None and (blender_object.name, library) in gather_node.__cache:
+        return gather_node.__cache[(blender_object.name, library)]
 
-    node = __gather_node(blender_object, blender_scene, export_settings)
-    gather_node.__cache[blender_object.name] = node
+    node = __gather_node(blender_object, library, blender_scene, dupli_object_parent, export_settings)
+    gather_node.__cache[(blender_object.name, library)] = node
     return node
 
 @cached
-def __gather_node(blender_object, blender_scene, export_settings):
+def __gather_node(blender_object, library, blender_scene, dupli_object_parent, export_settings):
     # If blender_scene is None, we are coming from animation export
     # Check to know if object is exported is already done, so we don't check
     # again if object is instanced in scene : this check was already done when exporting object itself
@@ -61,7 +62,7 @@ def __gather_node(blender_object, blender_scene, export_settings):
         extensions=__gather_extensions(blender_object, export_settings),
         extras=__gather_extras(blender_object, export_settings),
         matrix=__gather_matrix(blender_object, export_settings),
-        mesh=__gather_mesh(blender_object, export_settings),
+        mesh=__gather_mesh(blender_object, library, export_settings),
         name=__gather_name(blender_object, export_settings),
         rotation=None,
         scale=None,
@@ -95,24 +96,17 @@ def __gather_node(blender_object, blender_scene, export_settings):
 def __filter_node(blender_object, blender_scene, export_settings):
     if blender_object.users == 0:
         return False
-    if bpy.app.version < (2, 80, 0):
-        if export_settings[gltf2_blender_export_keys.SELECTED] and not blender_object.select:
-            return False
-        if blender_scene is not None:
-            if blender_object.name not in blender_scene.objects:
+    if blender_scene is not None:
+        instanced =  any([blender_object.name in layer.objects for layer in blender_scene.view_layers])
+        if instanced is False:
+            # Check if object is from a linked collection
+            if any([blender_object.name in coll.objects for coll in bpy.data.collections if coll.library is not None]):
+                pass
+            else:
+                # Not instanced, not linked -> We don't keep this object
                 return False
-    else:
-        if blender_scene is not None:
-            instanced =  any([blender_object.name in layer.objects for layer in blender_scene.view_layers])
-            if instanced is False:
-                # Check if object is from a linked collection
-                if any([blender_object.name in coll.objects for coll in bpy.data.collections if coll.library is not None]):
-                    pass
-                else:
-                    # Not instanced, not linked -> We don't keep this object
-                    return False
-        if export_settings[gltf2_blender_export_keys.SELECTED] and blender_object.select_get() is False:
-            return False
+    if export_settings[gltf2_blender_export_keys.SELECTED] and blender_object.select_get() is False:
+        return False
 
     return True
 
@@ -127,28 +121,32 @@ def __gather_camera(blender_object, export_settings):
 def __gather_children(blender_object, blender_scene, export_settings):
     children = []
     # standard children
-    for child_object in blender_object.children:
-        if child_object.parent_bone:
+    for _child_object in blender_object.children:
+        if _child_object.parent_bone:
             # this is handled further down,
             # as the object should be a child of the specific bone,
             # not the Armature object
             continue
-        node = gather_node(child_object, blender_scene, export_settings)
+
+        child_object = _child_object.proxy if _child_object.proxy else _child_object
+
+        node = gather_node(child_object,
+            child_object.library.name if child_object.library else None,
+            blender_scene, None, export_settings)
         if node is not None:
             children.append(node)
     # blender dupli objects
-    if bpy.app.version < (2, 80, 0):
-        if blender_object.dupli_type == 'GROUP' and blender_object.dupli_group:
-            for dupli_object in blender_object.dupli_group.objects:
-                node = gather_node(dupli_object, blender_scene, export_settings)
-                if node is not None:
-                    children.append(node)
-    else:
-        if blender_object.instance_type == 'COLLECTION' and blender_object.instance_collection:
-            for dupli_object in blender_object.instance_collection.objects:
-                node = gather_node(dupli_object, blender_scene, export_settings)
-                if node is not None:
-                    children.append(node)
+    if blender_object.instance_type == 'COLLECTION' and blender_object.instance_collection:
+        for dupli_object in blender_object.instance_collection.objects:
+            if dupli_object.parent is not None:
+                continue
+            if dupli_object.type == "ARMATURE":
+                continue # There is probably a proxy
+            node = gather_node(dupli_object,
+                dupli_object.library.name if dupli_object.library else None,
+                blender_scene, blender_object.name, export_settings)
+            if node is not None:
+                children.append(node)
 
     # blender bones
     if blender_object.type == "ARMATURE":
@@ -160,7 +158,7 @@ def __gather_children(blender_object, blender_scene, export_settings):
             bones = [blender_object.pose.bones[b.name] for b in bones]
         for blender_bone in bones:
             if not blender_bone.parent:
-                joint = gltf2_blender_gather_joints.gather_joint(blender_bone, export_settings)
+                joint = gltf2_blender_gather_joints.gather_joint(blender_object, blender_bone, export_settings)
                 children.append(joint)
                 root_joints.append(joint)
         # handle objects directly parented to bones
@@ -178,7 +176,7 @@ def __gather_children(blender_object, blender_scene, export_settings):
             parent_joint = find_parent_joint(root_joints, child.parent_bone)
             if not parent_joint:
                 continue
-            child_node = gather_node(child, None, export_settings)
+            child_node = gather_node(child, None, None, None, export_settings)
             if child_node is None:
                 continue
             blender_bone = blender_object.pose.bones[parent_joint.name]
@@ -202,7 +200,10 @@ def __gather_children(blender_object, blender_scene, export_settings):
             if trans is None:
                 trans = [0, 0, 0]
             # bones go down their local y axis
-            bone_tail = [0, blender_bone.length / blender_bone.matrix.to_scale()[1], 0]
+            if blender_bone.matrix.to_scale()[1] >= 1e-6:
+                bone_tail = [0, blender_bone.length / blender_bone.matrix.to_scale()[1], 0]
+            else:
+                bone_tail = [0,0,0] # If scale is 0, tail == head
             child_node.translation = [trans[idx] + bone_tail[idx] for idx in range(3)]
 
             parent_joint.children.append(child_node)
@@ -246,7 +247,7 @@ def __gather_matrix(blender_object, export_settings):
     return []
 
 
-def __gather_mesh(blender_object, export_settings):
+def __gather_mesh(blender_object, library, export_settings):
     if blender_object.type != "MESH":
         return None
 
@@ -273,10 +274,7 @@ def __gather_mesh(blender_object, export_settings):
             edge_split.split_angle = blender_object.data.auto_smooth_angle
             edge_split.use_edge_angle = not blender_object.data.has_custom_normals
             blender_object.data.use_auto_smooth = some_normals_modifier
-            if bpy.app.version < (2, 80, 0):
-                bpy.context.scene.update()
-            else:
-                bpy.context.view_layer.update()
+            bpy.context.view_layer.update()
 
         armature_modifiers = {}
         if export_settings[gltf2_blender_export_keys.SKINS]:
@@ -286,12 +284,9 @@ def __gather_mesh(blender_object, export_settings):
                     armature_modifiers[idx] = modifier.show_viewport
                     modifier.show_viewport = False
 
-        if bpy.app.version < (2, 80, 0):
-            blender_mesh = blender_object.to_mesh(bpy.context.scene, True, 'PREVIEW')
-        else:
-            depsgraph = bpy.context.evaluated_depsgraph_get()
-            blender_mesh_owner = blender_object.evaluated_get(depsgraph)
-            blender_mesh = blender_mesh_owner.to_mesh(preserve_all_data_layers=True, depsgraph=depsgraph)
+        depsgraph = bpy.context.evaluated_depsgraph_get()
+        blender_mesh_owner = blender_object.evaluated_get(depsgraph)
+        blender_mesh = blender_mesh_owner.to_mesh(preserve_all_data_layers=True, depsgraph=depsgraph)
         for prop in blender_object.data.keys():
             blender_mesh[prop] = blender_object.data[prop]
         skip_filter = True
@@ -329,6 +324,7 @@ def __gather_mesh(blender_object, export_settings):
                 blender_object_for_skined_data = blender_object
 
     result = gltf2_blender_gather_mesh.gather_mesh(blender_mesh,
+                                                   library,
                                                    blender_object_for_skined_data,
                                                    vertex_groups,
                                                    modifiers,
@@ -337,21 +333,12 @@ def __gather_mesh(blender_object, export_settings):
                                                    export_settings)
 
     if export_settings[gltf2_blender_export_keys.APPLY]:
-        if bpy.app.version < (2, 80, 0):
-            bpy.data.meshes.remove(blender_mesh)
-        else:
-            blender_mesh_owner.to_mesh_clear()
+        blender_mesh_owner.to_mesh_clear()
 
     return result
 
 
 def __gather_name(blender_object, export_settings):
-    if bpy.app.version < (2, 80, 0):
-        if blender_object.dupli_type == 'GROUP' and blender_object.dupli_group:
-            return "Duplication_Offset_" + blender_object.name
-    else:
-        if blender_object.instance_type == 'COLLECTION' and blender_object.instance_collection:
-            return "Duplication_Offset_" + blender_object.name
     return blender_object.name
 
 
@@ -368,20 +355,27 @@ def __gather_trans_rot_scale(blender_object, export_settings):
     else:
         # matrix_local = matrix_parent_inverse*location*rotation*scale
         # Decomposing matrix_local gives less accuracy, but is needed if matrix_parent_inverse is not the identity.
-        trans, rot, sca = gltf2_blender_extract.decompose_transition(blender_object.matrix_local, export_settings)
+
+
+        if blender_object.matrix_local[3][3] != 0.0:
+            trans, rot, sca = gltf2_blender_extract.decompose_transition(blender_object.matrix_local, export_settings)
+        else:
+            # Some really weird cases, scale is null (if parent is null when evaluation is done)
+            print_console('WARNING', 'Some nodes are 0 scaled during evaluation. Result can be wrong')
+            trans = blender_object.location
+            if blender_object.rotation_mode in ['QUATERNION', 'AXIS_ANGLE']:
+                rot = blender_object.rotation_quaternion
+            else:
+                rot = blender_object.rotation_euler.to_quaternion()
+            sca = blender_object.scale
 
     trans = gltf2_blender_extract.convert_swizzle_location(trans, None, None, export_settings)
     rot = gltf2_blender_extract.convert_swizzle_rotation(rot, export_settings)
     sca = gltf2_blender_extract.convert_swizzle_scale(sca, export_settings)
 
-    if bpy.app.version < (2, 80, 0):
-        if blender_object.dupli_type == 'GROUP' and blender_object.dupli_group:
-            trans = -gltf2_blender_extract.convert_swizzle_location(
-                blender_object.dupli_group.dupli_offset, None, None, export_settings)
-    else:
-        if blender_object.instance_type == 'COLLECTION' and blender_object.instance_collection:
-            trans = -gltf2_blender_extract.convert_swizzle_location(
-                blender_object.instance_collection.instance_offset, None, None, export_settings)
+    if blender_object.instance_type == 'COLLECTION' and blender_object.instance_collection:
+        trans -= gltf2_blender_extract.convert_swizzle_location(
+            blender_object.instance_collection.instance_offset, None, None, export_settings)
     translation, rotation, scale = (None, None, None)
     trans[0], trans[1], trans[2] = gltf2_blender_math.round_if_near(trans[0], 0.0), gltf2_blender_math.round_if_near(trans[1], 0.0), \
                                    gltf2_blender_math.round_if_near(trans[2], 0.0)
@@ -409,12 +403,9 @@ def __gather_skin(blender_object, export_settings):
         return None
 
     # check if any vertices in the mesh are part of a vertex group
-    if bpy.app.version < (2, 80, 0):
-        blender_mesh = blender_object.to_mesh(bpy.context.scene, True, 'PREVIEW')
-    else:
-        depsgraph = bpy.context.evaluated_depsgraph_get()
-        blender_mesh_owner = blender_object.evaluated_get(depsgraph)
-        blender_mesh = blender_mesh_owner.to_mesh(preserve_all_data_layers=True, depsgraph=depsgraph)
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+    blender_mesh_owner = blender_object.evaluated_get(depsgraph)
+    blender_mesh = blender_mesh_owner.to_mesh(preserve_all_data_layers=True, depsgraph=depsgraph)
     if not any(vertex.groups is not None and len(vertex.groups) > 0 for vertex in blender_mesh.vertices):
         return None
 

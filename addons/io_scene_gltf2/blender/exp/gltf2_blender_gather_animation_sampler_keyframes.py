@@ -19,7 +19,6 @@ import typing
 from io_scene_gltf2.blender.exp.gltf2_blender_gather_cache import cached, bonecache
 from io_scene_gltf2.blender.com import gltf2_blender_math
 from io_scene_gltf2.blender.exp import gltf2_blender_get
-from io_scene_gltf2.blender.exp import gltf2_blender_extract
 from io_scene_gltf2.blender.exp.gltf2_blender_gather_drivers import get_sk_drivers, get_sk_driver_values
 from . import gltf2_blender_export_keys
 from io_scene_gltf2.io.com import gltf2_io_debug
@@ -160,18 +159,16 @@ def get_bone_matrix(blender_object_if_armature: typing.Optional[bpy.types.Object
         bpy.context.scene.frame_set(frame)
         for pbone in blender_object_if_armature.pose.bones:
             if bake_bone is None:
-                matrix = pbone.matrix_basis
+                matrix = pbone.matrix_basis.copy()
             else:
                 matrix = pbone.matrix
-                if bpy.app.version < (2, 80, 0):
-                    matrix = blender_object_if_armature.convert_space(pbone, matrix, 'POSE', 'LOCAL')
-                else:
-                    matrix = blender_object_if_armature.convert_space(pose_bone=pbone, matrix=matrix, from_space='POSE', to_space='LOCAL')
+                matrix = blender_object_if_armature.convert_space(pose_bone=pbone, matrix=matrix, from_space='POSE', to_space='LOCAL')
             data[frame][pbone.name] = matrix
 
 
         # If some drivers must be evaluated, do it here, to avoid to have to change frame by frame later
-        drivers_to_manage = get_sk_drivers(blender_object_if_armature)
+        obj_driver = blender_object_if_armature.proxy if blender_object_if_armature.proxy else blender_object_if_armature
+        drivers_to_manage = get_sk_drivers(obj_driver)
         for dr_obj, dr_fcurves in drivers_to_manage:
             vals = get_sk_driver_values(dr_obj, frame, dr_fcurves)
 

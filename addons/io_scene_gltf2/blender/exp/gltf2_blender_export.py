@@ -24,12 +24,14 @@ from io_scene_gltf2.blender.exp.gltf2_blender_gltf2_exporter import GlTF2Exporte
 from io_scene_gltf2.io.com.gltf2_io_debug import print_console, print_newline
 from io_scene_gltf2.io.exp import gltf2_io_export
 from io_scene_gltf2.io.exp import gltf2_io_draco_compression_extension
+from io_scene_gltf2.io.exp.gltf2_io_user_extensions import export_user_extensions
 
 
 def save(context, export_settings):
     """Start the glTF 2.0 export and saves to content either to a .gltf or .glb file."""
     if bpy.context.active_object is not None:
-        bpy.ops.object.mode_set(mode='OBJECT')
+        if bpy.context.active_object.mode != "OBJECT": # For linked object, you can't force OBJECT mode
+            bpy.ops.object.mode_set(mode='OBJECT')
 
     original_frame = bpy.context.scene.frame_current
     if not export_settings['gltf_current_frame']:
@@ -60,6 +62,10 @@ def __export(export_settings):
 
 def __gather_gltf(exporter, export_settings):
     active_scene_idx, scenes, animations = gltf2_blender_gather.gather_gltf2(export_settings)
+
+    plan = {'active_scene_idx': active_scene_idx, 'scenes': scenes, 'animations': animations}
+    export_user_extensions('gather_gltf_hook', export_settings, plan)
+    active_scene_idx, scenes, animations = plan['active_scene_idx'], plan['scenes'], plan['animations']
 
     if export_settings['gltf_draco_mesh_compression']:
         gltf2_io_draco_compression_extension.compress_scene_primitives(scenes, export_settings)
