@@ -295,7 +295,7 @@ class GlTF2Exporter:
         if type(node) in self.__propertyTypeLookup:
             return __traverse_property(node)
 
-        # binary data needs to be moved to a buffer and referenced with a buffer view
+        # # binary data needs to be moved to a buffer and referenced with a buffer view
         if isinstance(node, gltf2_io_binary_data.BinaryData):
             buffer_view = self.__buffer.add_and_get_view(node)
             return self.__to_reference(buffer_view)
