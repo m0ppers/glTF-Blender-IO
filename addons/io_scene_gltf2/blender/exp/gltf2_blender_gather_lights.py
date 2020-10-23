@@ -47,7 +47,8 @@ def gather_lights_punctual(blender_lamp, export_settings) -> Optional[Dict[str, 
 
 def __filter_lights_punctual(blender_lamp, export_settings) -> bool:
     if blender_lamp.type in ["HEMI", "AREA"]:
-        gltf2_io_debug.print_console("WARNING", "Unsupported light source {}".format(blender_lamp.type))
+        gltf2_io_debug.print_console(
+            "WARNING", "Unsupported light source {}".format(blender_lamp.type))
         return False
 
     return True
@@ -68,11 +69,13 @@ def __gather_intensity(blender_lamp, _) -> Optional[float]:
             # When using cycles, the strength should be influenced by a LightFalloff node
             result = gltf2_blender_search_node_tree.from_socket(
                 emission_node.inputs.get("Strength"),
-                gltf2_blender_search_node_tree.FilterByType(bpy.types.ShaderNodeLightFalloff)
+                gltf2_blender_search_node_tree.FilterByType(
+                    bpy.types.ShaderNodeLightFalloff)
             )
             if result:
                 quadratic_falloff_node = result[0].shader_node
-                emission_strength = quadratic_falloff_node.inputs["Strength"].default_value / (math.pi * 4.0)
+                emission_strength = quadratic_falloff_node.inputs["Strength"].default_value / (
+                    math.pi * 4.0)
             else:
                 gltf2_io_debug.print_console('WARNING',
                                              'No quadratic light falloff node attached to emission strength property')
@@ -81,7 +84,8 @@ def __gather_intensity(blender_lamp, _) -> Optional[float]:
             emission_strength = emission_node.inputs["Strength"].default_value
         return emission_strength
 
-    return blender_lamp.energy
+    kv_const = 638
+    return blender_lamp.energy * 4 * math.pi / kv_const
 
 
 def __gather_spot(blender_lamp, export_settings) -> Optional[gltf2_io_lights_punctual.LightSpot]:
@@ -121,13 +125,15 @@ def __gather_extras(blender_lamp, export_settings) -> Optional[Any]:
 def __get_cycles_emission_node(blender_lamp) -> Optional[bpy.types.ShaderNodeEmission]:
     if blender_lamp.use_nodes and blender_lamp.node_tree:
         for currentNode in blender_lamp.node_tree.nodes:
-            is_shadernode_output = isinstance(currentNode, bpy.types.ShaderNodeOutputLight)
+            is_shadernode_output = isinstance(
+                currentNode, bpy.types.ShaderNodeOutputLight)
             if is_shadernode_output:
                 if not currentNode.is_active_output:
                     continue
                 result = gltf2_blender_search_node_tree.from_socket(
                     currentNode.inputs.get("Surface"),
-                    gltf2_blender_search_node_tree.FilterByType(bpy.types.ShaderNodeEmission)
+                    gltf2_blender_search_node_tree.FilterByType(
+                        bpy.types.ShaderNodeEmission)
                 )
                 if not result:
                     continue
