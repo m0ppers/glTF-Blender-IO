@@ -16,6 +16,8 @@ import bpy
 from ...io.com.gltf2_io import TextureInfo, MaterialPBRMetallicRoughness
 from ..com.gltf2_blender_material_helpers import get_gltf_node_name
 from .gltf2_blender_texture import texture
+from .gltf2_blender_KHR_materials_clearcoat import \
+    clearcoat, clearcoat_roughness, clearcoat_normal
 
 
 class MaterialHelper:
@@ -54,39 +56,110 @@ def pbr_metallic_roughness(mh: MaterialHelper):
         make_alpha_socket=False,
     )
 
+    locs = calc_locations(mh)
+
     emission(
         mh,
-        location=(-200, 860),
+        location=locs['emission'],
         color_socket=pbr_node.inputs['Emission'],
+        strength_socket=pbr_node.inputs['Emission Strength'],
     )
 
     base_color(
         mh,
-        location=(-200, 380),
+        location=locs['base_color'],
         color_socket=pbr_node.inputs['Base Color'],
         alpha_socket=pbr_node.inputs['Alpha'] if not mh.is_opaque() else None,
     )
 
     metallic_roughness(
         mh,
-        location=(-200, -100),
+        location=locs['metallic_roughness'],
         metallic_socket=pbr_node.inputs['Metallic'],
         roughness_socket=pbr_node.inputs['Roughness'],
     )
 
     normal(
         mh,
-        location=(-200, -580),
+        location=locs['normal'],
         normal_socket=pbr_node.inputs['Normal'],
     )
 
     if mh.pymat.occlusion_texture is not None:
-        node = make_settings_node(mh, location=(610, -1060))
+        node = make_settings_node(mh)
+        node.location = 40, -370
+        node.width = 180
         occlusion(
             mh,
-            location=(510, -970),
+            location=locs['occlusion'],
             occlusion_socket=node.inputs['Occlusion'],
         )
+
+    clearcoat(
+        mh,
+        location=locs['clearcoat'],
+        clearcoat_socket=pbr_node.inputs['Clearcoat'],
+    )
+
+    clearcoat_roughness(
+        mh,
+        location=locs['clearcoat_roughness'],
+        roughness_socket=pbr_node.inputs['Clearcoat Roughness'],
+    )
+
+    clearcoat_normal(
+        mh,
+        location=locs['clearcoat_normal'],
+        normal_socket=pbr_node.inputs['Clearcoat Normal'],
+    )
+
+
+def calc_locations(mh):
+    """Calculate locations to place each bit of the node graph at."""
+    # Lay the blocks out top-to-bottom, aligned on the right
+    x = -200
+    y = 0
+    height = 460  # height of each block
+    locs = {}
+
+    try:
+        clearcoat_ext = mh.pymat.extensions['KHR_materials_clearcoat']
+    except Exception:
+        clearcoat_ext = {}
+
+    locs['base_color'] = (x, y)
+    if mh.pymat.pbr_metallic_roughness.base_color_texture is not None or mh.vertex_color:
+        y -= height
+    locs['metallic_roughness'] = (x, y)
+    if mh.pymat.pbr_metallic_roughness.metallic_roughness_texture is not None:
+        y -= height
+    locs['clearcoat'] = (x, y)
+    if 'clearcoatTexture' in clearcoat_ext:
+        y -= height
+    locs['clearcoat_roughness'] = (x, y)
+    if 'clearcoatRoughnessTexture' in clearcoat_ext:
+        y -= height
+    locs['emission'] = (x, y)
+    if mh.pymat.emissive_texture is not None:
+        y -= height
+    locs['normal'] = (x, y)
+    if mh.pymat.normal_texture is not None:
+        y -= height
+    locs['clearcoat_normal'] = (x, y)
+    if 'clearcoatNormalTexture' in clearcoat_ext:
+        y -= height
+    locs['occlusion'] = (x, y)
+    if mh.pymat.occlusion_texture is not None:
+        y -= height
+
+    # Center things
+    total_height = -y
+    y_offset = total_height / 2 - 20
+    for key in locs:
+        x, y = locs[key]
+        locs[key] = (x, y + y_offset)
+
+    return locs
 
 
 # These functions each create one piece of the node graph, slotting
@@ -95,7 +168,7 @@ def pbr_metallic_roughness(mh: MaterialHelper):
 
 
 # [Texture] => [Emissive Factor] =>
-def emission(mh: MaterialHelper, location, color_socket):
+def emission(mh: MaterialHelper, location, color_socket, strength_socket=None):
     x, y = location
     emissive_factor = mh.pymat.emissive_factor or [0, 0, 0]
 
@@ -106,20 +179,26 @@ def emission(mh: MaterialHelper, location, color_socket):
         color_socket.default_value = emissive_factor + [1]
         return
 
-    # Mix emissive factor
-    if emissive_factor != [1, 1, 1]:
-        node = mh.node_tree.nodes.new('ShaderNodeMixRGB')
-        node.label = 'Emissive Factor'
-        node.location = x - 140, y
-        node.blend_type = 'MULTIPLY'
-        # Outputs
-        mh.node_tree.links.new(color_socket, node.outputs[0])
-        # Inputs
-        node.inputs['Fac'].default_value = 1.0
-        color_socket = node.inputs['Color1']
-        node.inputs['Color2'].default_value = emissive_factor + [1]
+    # Put grayscale emissive factors into the Emission Strength
+    e0, e1, e2 = emissive_factor
+    if strength_socket and e0 == e1 == e2:
+        strength_socket.default_value = e0
 
-        x -= 200
+    # Otherwise, use a multiply node for it
+    else:
+        if emissive_factor != [1, 1, 1]:
+            node = mh.node_tree.nodes.new('ShaderNodeMixRGB')
+            node.label = 'Emissive Factor'
+            node.location = x - 140, y
+            node.blend_type = 'MULTIPLY'
+            # Outputs
+            mh.node_tree.links.new(color_socket, node.outputs[0])
+            # Inputs
+            node.inputs['Fac'].default_value = 1.0
+            color_socket = node.inputs['Color1']
+            node.inputs['Color2'].default_value = emissive_factor + [1]
+
+            x -= 200
 
     texture(
         mh,
@@ -161,7 +240,7 @@ def base_color(
         base_color_factor = [1, 1, 1, 1]
 
     if base_color_texture is None and not mh.vertex_color:
-        color_socket.default_value = base_color_factor
+        color_socket.default_value = base_color_factor[:3] + [1]
         if alpha_socket is not None:
             alpha_socket.default_value = base_color_factor[3]
         return
@@ -170,10 +249,7 @@ def base_color(
     needs_color_factor = base_color_factor[:3] != [1, 1, 1]
     needs_alpha_factor = base_color_factor[3] != 1.0 and alpha_socket is not None
     if needs_color_factor or needs_alpha_factor:
-        # For now, always create the color factor node because the exporter
-        # reads the alpha value from here. Can get rid of "or needs_alpha_factor"
-        # when it learns to understand the alpha socket.
-        if needs_color_factor or needs_alpha_factor:
+        if needs_color_factor:
             node = mh.node_tree.nodes.new('ShaderNodeMixRGB')
             node.label = 'Color Factor'
             node.location = x - 140, y
@@ -183,7 +259,7 @@ def base_color(
             # Inputs
             node.inputs['Fac'].default_value = 1.0
             color_socket = node.inputs['Color1']
-            node.inputs['Color2'].default_value = base_color_factor
+            node.inputs['Color2'].default_value = base_color_factor[:3] + [1]
 
         if needs_alpha_factor:
             node = mh.node_tree.nodes.new('ShaderNodeMath')
@@ -461,14 +537,13 @@ def make_output_nodes(
     return emission_socket, alpha_socket
 
 
-def make_settings_node(mh, location):
+def make_settings_node(mh):
     """
     Make a Group node with a hookup for Occlusion. No effect in Blender, but
     used to tell the exporter what the occlusion map should be.
     """
     node = mh.node_tree.nodes.new('ShaderNodeGroup')
     node.node_tree = get_settings_group()
-    node.location = location
     return node
 
 

@@ -11,12 +11,15 @@ Documentation
 | 2.80    | https://docs.blender.org/manual/en/2.80/addons/io_scene_gltf2.html |
 | 2.81    | https://docs.blender.org/manual/en/2.81/addons/import_export/io_scene_gltf2.html |
 | 2.82    | https://docs.blender.org/manual/en/2.82/addons/import_export/scene_gltf2.html  |
+| 2.83    | https://docs.blender.org/manual/en/2.83/addons/import_export/scene_gltf2.html  |
+| 2.90    | https://docs.blender.org/manual/en/2.90/addons/import_export/scene_gltf2.html  |
 | dev     | https://docs.blender.org/manual/en/dev/addons/import_export/scene_gltf2.html  |
 
 Notes:
-* 2.80 - 2.81 are previous stable releases.
-* 2.82 is the current stable release. Check the `blender-v2.82-release` branch.
-* master branch of this addon is mirrored in [Blender Addons master](https://developer.blender.org/diffusion/BA/browse/master/io_scene_gltf2/), that will become 2.83.
+* 2.80 - 2.82 are previous stable releases.
+* 2.83 is the first Blender LTS release. Check the `blender-v2.83-release` branch.
+* 2.90 is the current stable release. Check the `blender-v2.90-release` branch.
+* master branch of this addon is mirrored in [Blender Addons master](https://developer.blender.org/diffusion/BA/browse/master/io_scene_gltf2/), that will become 2.91.
 
 ### Legacy 2.79 Support
 
@@ -27,7 +30,7 @@ Blender 2.80 and higher bundle this addon in the main Blender install package, s
 Credits
 -------
 
-Developed by [UX3D](https://www.ux3d.io/) and [Julien Duroure](http://julienduroure.com/), with support from the [Khronos Group](https://www.khronos.org/), [Mozilla](https://www.mozilla.org/), and [Airbus Defense & Space](https://www.airbus.com/space.html).
+Developed by [UX3D](https://www.ux3d.io/), Scurest and [Julien Duroure](http://julienduroure.com/), with support from the [Khronos Group](https://www.khronos.org/), [Mozilla](https://www.mozilla.org/), and [Airbus Defense & Space](https://www.airbus.com/space.html).
 
 Introduction
 ------------

@@ -12,690 +12,497 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-#
-# Imports
-#
-
+import numpy as np
 from mathutils import Vector, Quaternion, Matrix
-from mathutils.geometry import tessellate_polygon
-from operator import attrgetter
 
 from . import gltf2_blender_export_keys
 from ...io.com.gltf2_io_debug import print_console
-from ...io.com.gltf2_io_color_management import color_srgb_to_scene_linear
 from io_scene_gltf2.blender.exp import gltf2_blender_gather_skins
-
-#
-# Globals
-#
-
-INDICES_ID = 'indices'
-MATERIAL_ID = 'material'
-ATTRIBUTES_ID = 'attributes'
-
-COLOR_PREFIX = 'COLOR_'
-MORPH_TANGENT_PREFIX = 'MORPH_TANGENT_'
-MORPH_NORMAL_PREFIX = 'MORPH_NORMAL_'
-MORPH_POSITION_PREFIX = 'MORPH_POSITION_'
-TEXCOORD_PREFIX = 'TEXCOORD_'
-WEIGHTS_PREFIX = 'WEIGHTS_'
-JOINTS_PREFIX = 'JOINTS_'
-
-TANGENT_ATTRIBUTE = 'TANGENT'
-NORMAL_ATTRIBUTE = 'NORMAL'
-POSITION_ATTRIBUTE = 'POSITION'
-
-GLTF_MAX_COLORS = 2
-
-
-#
-# Classes
-#
-
-class ShapeKey:
-    def __init__(self, shape_key, vertex_normals, polygon_normals):
-        self.shape_key = shape_key
-        self.vertex_normals = vertex_normals
-        self.polygon_normals = polygon_normals
-
-
-#
-# Functions
-#
-
-def convert_swizzle_normal(loc, armature, blender_object, export_settings):
-    """Convert a normal data from Blender coordinate system to glTF coordinate system."""
-    if (not armature) or (not blender_object):
-        # Classic case. Mesh is not skined, no need to apply armature transfoms on vertices / normals / tangents
-        if export_settings[gltf2_blender_export_keys.YUP]:
-            return Vector((loc[0], loc[2], -loc[1]))
-        else:
-            return Vector((loc[0], loc[1], loc[2]))
-    else:
-        # Mesh is skined, we have to apply armature transforms on data
-        apply_matrix = (armature.matrix_world.inverted() @ blender_object.matrix_world).to_3x3().inverted()
-        apply_matrix.transpose()
-        new_loc = ((armature.matrix_world.to_3x3() @ apply_matrix).to_4x4() @ Matrix.Translation(Vector((loc[0], loc[1], loc[2])))).to_translation()
-        new_loc.normalize()
-
-        if export_settings[gltf2_blender_export_keys.YUP]:
-            return Vector((new_loc[0], new_loc[2], -new_loc[1]))
-        else:
-            return Vector((new_loc[0], new_loc[1], new_loc[2]))
-
-def convert_swizzle_location(loc, armature, blender_object, export_settings):
-    """Convert a location from Blender coordinate system to glTF coordinate system."""
-    if (not armature) or (not blender_object):
-        # Classic case. Mesh is not skined, no need to apply armature transfoms on vertices / normals / tangents
-        if export_settings[gltf2_blender_export_keys.YUP]:
-            return Vector((loc[0], loc[2], -loc[1]))
-        else:
-            return Vector((loc[0], loc[1], loc[2]))
-    else:
-        # Mesh is skined, we have to apply armature transforms on data
-        apply_matrix = armature.matrix_world.inverted() @ blender_object.matrix_world
-        new_loc = (armature.matrix_world @ apply_matrix @ Matrix.Translation(Vector((loc[0], loc[1], loc[2])))).to_translation()
-
-        if export_settings[gltf2_blender_export_keys.YUP]:
-            return Vector((new_loc[0], new_loc[2], -new_loc[1]))
-        else:
-            return Vector((new_loc[0], new_loc[1], new_loc[2]))
-
-
-def convert_swizzle_tangent(tan, armature, blender_object, export_settings):
-    """Convert a tangent from Blender coordinate system to glTF coordinate system."""
-    if tan[0] == 0.0 and tan[1] == 0.0 and tan[2] == 0.0:
-        print_console('WARNING', 'Tangent has zero length.')
-
-    if (not armature) or (not blender_object):
-        # Classic case. Mesh is not skined, no need to apply armature transfoms on vertices / normals / tangents
-        if export_settings[gltf2_blender_export_keys.YUP]:
-            return Vector((tan[0], tan[2], -tan[1], 1.0))
-        else:
-            return Vector((tan[0], tan[1], tan[2], 1.0))
-    else:
-        # Mesh is skined, we have to apply armature transforms on data
-        apply_matrix = armature.matrix_world.inverted() @ blender_object.matrix_world
-        new_tan = apply_matrix.to_quaternion() @ tan
-        if export_settings[gltf2_blender_export_keys.YUP]:
-            return Vector((new_tan[0], new_tan[2], -new_tan[1], 1.0))
-        else:
-            return Vector((new_tan[0], new_tan[1], new_tan[2], 1.0))
-
-def convert_swizzle_rotation(rot, export_settings):
-    """
-    Convert a quaternion rotation from Blender coordinate system to glTF coordinate system.
-
-    'w' is still at first position.
-    """
-    if export_settings[gltf2_blender_export_keys.YUP]:
-        return Quaternion((rot[0], rot[1], rot[3], -rot[2]))
-    else:
-        return Quaternion((rot[0], rot[1], rot[2], rot[3]))
-
-
-def convert_swizzle_scale(scale, export_settings):
-    """Convert a scale from Blender coordinate system to glTF coordinate system."""
-    if export_settings[gltf2_blender_export_keys.YUP]:
-        return Vector((scale[0], scale[2], scale[1]))
-    else:
-        return Vector((scale[0], scale[1], scale[2]))
-
-
-def decompose_transition(matrix, export_settings):
-    translation, rotation, scale = matrix.decompose()
-
-    return translation, rotation, scale
 
 
 def extract_primitives(glTF, blender_mesh, library, blender_object, blender_vertex_groups, modifiers, export_settings):
-    """
-    Extract primitives from a mesh. Polygons are triangulated and sorted by material.
-
-    Furthermore, primitives are split up, if the indices range is exceeded.
-    Finally, triangles are also split up/duplicated, if face normals are used instead of vertex normals.
-    """
+    """Extract primitives from a mesh."""
     print_console('INFO', 'Extracting primitive: ' + blender_mesh.name)
 
-    if blender_mesh.has_custom_normals:
-        # Custom normals are all (0, 0, 0) until calling calc_normals_split() or calc_tangents().
+    use_normals = export_settings[gltf2_blender_export_keys.NORMALS]
+    if use_normals:
         blender_mesh.calc_normals_split()
 
     use_tangents = False
-    if blender_mesh.uv_layers.active and len(blender_mesh.uv_layers) > 0:
-        try:
-            blender_mesh.calc_tangents()
-            use_tangents = True
-        except Exception:
-            print_console('WARNING', 'Could not calculate tangents. Please try to triangulate the mesh first.')
-
-    #
-
-    material_map = {}
-
-    #
-    # Gathering position, normal and tex_coords.
-    #
-    no_material_attributes = {
-        POSITION_ATTRIBUTE: [],
-        NORMAL_ATTRIBUTE: []
-    }
-
-    if use_tangents:
-        no_material_attributes[TANGENT_ATTRIBUTE] = []
-
-    #
-    # Directory of materials with its primitive.
-    #
-    no_material_primitives = {
-        MATERIAL_ID: 0,
-        INDICES_ID: [],
-        ATTRIBUTES_ID: no_material_attributes
-    }
-
-    material_idx_to_primitives = {0: no_material_primitives}
-
-    #
-
-    vertex_index_to_new_indices = {}
-
-    material_map[0] = vertex_index_to_new_indices
-
-    #
-    # Create primitive for each material.
-    #
-    for (mat_idx, _) in enumerate(blender_mesh.materials):
-        attributes = {
-            POSITION_ATTRIBUTE: [],
-            NORMAL_ATTRIBUTE: []
-        }
-
-        if use_tangents:
-            attributes[TANGENT_ATTRIBUTE] = []
-
-        primitive = {
-            MATERIAL_ID: mat_idx,
-            INDICES_ID: [],
-            ATTRIBUTES_ID: attributes
-        }
-
-        material_idx_to_primitives[mat_idx] = primitive
-
-        #
-
-        vertex_index_to_new_indices = {}
-
-        material_map[mat_idx] = vertex_index_to_new_indices
+    if use_normals and export_settings[gltf2_blender_export_keys.TANGENTS]:
+        if blender_mesh.uv_layers.active and len(blender_mesh.uv_layers) > 0:
+            try:
+                blender_mesh.calc_tangents()
+                use_tangents = True
+            except Exception:
+                print_console('WARNING', 'Could not calculate tangents. Please try to triangulate the mesh first.')
 
     tex_coord_max = 0
-    if blender_mesh.uv_layers.active:
-        tex_coord_max = len(blender_mesh.uv_layers)
+    if export_settings[gltf2_blender_export_keys.TEX_COORDS]:
+        if blender_mesh.uv_layers.active:
+            tex_coord_max = len(blender_mesh.uv_layers)
 
-    #
-
-    vertex_colors = {}
-
-    color_index = 0
-    for vertex_color in blender_mesh.vertex_colors:
-        vertex_color_name = COLOR_PREFIX + str(color_index)
-        vertex_colors[vertex_color_name] = vertex_color
-
-        color_index += 1
-        if color_index >= GLTF_MAX_COLORS:
-            break
-    color_max = color_index
-
-    #
-
-    bone_max = 0
-    for blender_polygon in blender_mesh.polygons:
-        for loop_index in blender_polygon.loop_indices:
-            vertex_index = blender_mesh.loops[loop_index].vertex_index
-            bones_count = len(blender_mesh.vertices[vertex_index].groups)
-            if bones_count > 0:
-                if bones_count % 4 == 0:
-                    bones_count -= 1
-                bone_max = max(bone_max, bones_count // 4 + 1)
-
-    #
-
-    morph_max = 0
-
-    blender_shape_keys = []
-
-    if blender_mesh.shape_keys is not None:
-        for blender_shape_key in blender_mesh.shape_keys.key_blocks:
-            if blender_shape_key != blender_shape_key.relative_key:
-                if blender_shape_key.mute is False:
-                    morph_max += 1
-                    blender_shape_keys.append(ShapeKey(
-                        blender_shape_key,
-                        blender_shape_key.normals_vertex_get(),  # calculate vertex normals for this shape key
-                        blender_shape_key.normals_polygon_get()))  # calculate polygon normals for this shape key
-
+    color_max = 0
+    if export_settings[gltf2_blender_export_keys.COLORS]:
+        color_max = len(blender_mesh.vertex_colors)
 
     armature = None
-    if modifiers is not None:
-        modifiers_dict = {m.type: m for m in modifiers}
-        if "ARMATURE" in modifiers_dict:
-            modifier = modifiers_dict["ARMATURE"]
-            armature = modifier.object
+    skin = None
+    if blender_vertex_groups and export_settings[gltf2_blender_export_keys.SKINS]:
+        if modifiers is not None:
+            modifiers_dict = {m.type: m for m in modifiers}
+            if "ARMATURE" in modifiers_dict:
+                modifier = modifiers_dict["ARMATURE"]
+                armature = modifier.object
 
+        # Skin must be ignored if the object is parented to a bone of the armature
+        # (This creates an infinite recursive error)
+        # So ignoring skin in that case
+        is_child_of_arma = (
+            armature and
+            blender_object and
+            blender_object.parent_type == "BONE" and
+            blender_object.parent.name == armature.name
+        )
+        if is_child_of_arma:
+            armature = None
 
+        if armature:
+            skin = gltf2_blender_gather_skins.gather_skin(armature, export_settings)
+            if not skin:
+                armature = None
+
+    use_morph_normals = use_normals and export_settings[gltf2_blender_export_keys.MORPH_NORMAL]
+    use_morph_tangents = use_morph_normals and use_tangents and export_settings[gltf2_blender_export_keys.MORPH_TANGENT]
+
+    key_blocks = []
+    if blender_mesh.shape_keys and export_settings[gltf2_blender_export_keys.MORPH]:
+        key_blocks = [
+            key_block
+            for key_block in blender_mesh.shape_keys.key_blocks
+            if not (key_block == key_block.relative_key or key_block.mute)
+        ]
+
+    use_materials = export_settings[gltf2_blender_export_keys.MATERIALS]
+
+    # Fetch vert positions and bone data (joint,weights)
+
+    locs, morph_locs = __get_positions(blender_mesh, key_blocks, armature, blender_object, export_settings)
+    if skin:
+        vert_bones, num_joint_sets = __get_bone_data(blender_mesh, skin, blender_vertex_groups)
+
+    # In Blender there is both per-vert data, like position, and also per-loop
+    # (loop=corner-of-poly) data, like normals or UVs. glTF only has per-vert
+    # data, so we need to split Blender verts up into potentially-multiple glTF
+    # verts.
     #
-    # Convert polygon to primitive indices and eliminate invalid ones. Assign to material.
+    # First, we'll collect a "dot" for every loop: a struct that stores all the
+    # attributes at that loop, namely the vertex index (which determines all
+    # per-vert data), and all the per-loop data like UVs, etc.
     #
-    for blender_polygon in blender_mesh.polygons:
-        export_color = True
+    # Each unique dot will become one unique glTF vert.
 
-        #
+    # List all fields the dot struct needs.
+    dot_fields = [('vertex_index', np.uint32)]
+    if use_normals:
+        dot_fields += [('nx', np.float32), ('ny', np.float32), ('nz', np.float32)]
+    if use_tangents:
+        dot_fields += [('tx', np.float32), ('ty', np.float32), ('tz', np.float32), ('tw', np.float32)]
+    for uv_i in range(tex_coord_max):
+        dot_fields += [('uv%dx' % uv_i, np.float32), ('uv%dy' % uv_i, np.float32)]
+    for col_i in range(color_max):
+        dot_fields += [
+            ('color%dr' % col_i, np.float32),
+            ('color%dg' % col_i, np.float32),
+            ('color%db' % col_i, np.float32),
+            ('color%da' % col_i, np.float32),
+        ]
+    if use_morph_normals:
+        for morph_i, _ in enumerate(key_blocks):
+            dot_fields += [
+                ('morph%dnx' % morph_i, np.float32),
+                ('morph%dny' % morph_i, np.float32),
+                ('morph%dnz' % morph_i, np.float32),
+            ]
 
-        if export_settings['gltf_materials'] is False:
-            primitive = material_idx_to_primitives[0]
-            vertex_index_to_new_indices = material_map[0]
-        elif not blender_polygon.material_index in material_idx_to_primitives:
-            primitive = material_idx_to_primitives[0]
-            vertex_index_to_new_indices = material_map[0]
-        else:
-            primitive = material_idx_to_primitives[blender_polygon.material_index]
-            vertex_index_to_new_indices = material_map[blender_polygon.material_index]
-        #
+    dots = np.empty(len(blender_mesh.loops), dtype=np.dtype(dot_fields))
 
-        attributes = primitive[ATTRIBUTES_ID]
+    vidxs = np.empty(len(blender_mesh.loops))
+    blender_mesh.loops.foreach_get('vertex_index', vidxs)
+    dots['vertex_index'] = vidxs
+    del vidxs
 
-        face_normal = blender_polygon.normal
-        face_tangent = Vector((0.0, 0.0, 0.0))
-        face_bitangent = Vector((0.0, 0.0, 0.0))
-        if use_tangents:
-            for loop_index in blender_polygon.loop_indices:
-                temp_vertex = blender_mesh.loops[loop_index]
-                face_tangent += temp_vertex.tangent
-                face_bitangent += temp_vertex.bitangent
+    if use_normals:
+        kbs = key_blocks if use_morph_normals else []
+        normals, morph_normals = __get_normals(
+            blender_mesh, kbs, armature, blender_object, export_settings
+        )
+        dots['nx'] = normals[:, 0]
+        dots['ny'] = normals[:, 1]
+        dots['nz'] = normals[:, 2]
+        del normals
+        for morph_i, ns in enumerate(morph_normals):
+            dots['morph%dnx' % morph_i] = ns[:, 0]
+            dots['morph%dny' % morph_i] = ns[:, 1]
+            dots['morph%dnz' % morph_i] = ns[:, 2]
+        del morph_normals
 
-            face_tangent.normalize()
-            face_bitangent.normalize()
+    if use_tangents:
+        tangents = __get_tangents(blender_mesh, armature, blender_object, export_settings)
+        dots['tx'] = tangents[:, 0]
+        dots['ty'] = tangents[:, 1]
+        dots['tz'] = tangents[:, 2]
+        del tangents
+        signs = __get_bitangent_signs(blender_mesh, armature, blender_object, export_settings)
+        dots['tw'] = signs
+        del signs
 
-        #
+    for uv_i in range(tex_coord_max):
+        uvs = __get_uvs(blender_mesh, uv_i)
+        dots['uv%dx' % uv_i] = uvs[:, 0]
+        dots['uv%dy' % uv_i] = uvs[:, 1]
+        del uvs
 
-        indices = primitive[INDICES_ID]
+    for col_i in range(color_max):
+        colors = __get_colors(blender_mesh, col_i)
+        dots['color%dr' % col_i] = colors[:, 0]
+        dots['color%dg' % col_i] = colors[:, 1]
+        dots['color%db' % col_i] = colors[:, 2]
+        dots['color%da' % col_i] = colors[:, 3]
+        del colors
 
-        loop_index_list = []
+    # Calculate triangles and sort them into primitives.
 
-        if len(blender_polygon.loop_indices) == 3:
-            loop_index_list.extend(blender_polygon.loop_indices)
-        elif len(blender_polygon.loop_indices) > 3:
-            # Triangulation of polygon. Using internal function, as non-convex polygons could exist.
-            polyline = []
+    blender_mesh.calc_loop_triangles()
+    loop_indices = np.empty(len(blender_mesh.loop_triangles) * 3, dtype=np.uint32)
+    blender_mesh.loop_triangles.foreach_get('loops', loop_indices)
 
-            for loop_index in blender_polygon.loop_indices:
-                vertex_index = blender_mesh.loops[loop_index].vertex_index
-                v = blender_mesh.vertices[vertex_index].co
-                polyline.append(Vector((v[0], v[1], v[2])))
+    prim_indices = {}  # maps material index to TRIANGLES-style indices into dots
 
-            triangles = tessellate_polygon((polyline,))
+    if use_materials == "NONE": # Only for None. For placeholder and export, keep primitives
+        # Put all vertices into one primitive
+        prim_indices[-1] = loop_indices
 
-            for triangle in triangles:
+    else:
+        # Bucket by material index.
 
-                for triangle_index in triangle:
-                    loop_index_list.append(blender_polygon.loop_indices[triangle_index])
-        else:
+        tri_material_idxs = np.empty(len(blender_mesh.loop_triangles), dtype=np.uint32)
+        blender_mesh.loop_triangles.foreach_get('material_index', tri_material_idxs)
+        loop_material_idxs = np.repeat(tri_material_idxs, 3)  # material index for every loop
+        unique_material_idxs = np.unique(tri_material_idxs)
+        del tri_material_idxs
+
+        for material_idx in unique_material_idxs:
+            prim_indices[material_idx] = loop_indices[loop_material_idxs == material_idx]
+
+    # Create all the primitives.
+
+    primitives = []
+
+    for material_idx, dot_indices in prim_indices.items():
+        # Extract just dots used by this primitive, deduplicate them, and
+        # calculate indices into this deduplicated list.
+        prim_dots = dots[dot_indices]
+        prim_dots, indices = np.unique(prim_dots, return_inverse=True)
+
+        if len(prim_dots) == 0:
             continue
 
-        for loop_index in loop_index_list:
-            vertex_index = blender_mesh.loops[loop_index].vertex_index
+        # Now just move all the data for prim_dots into attribute arrays
 
-            if vertex_index_to_new_indices.get(vertex_index) is None:
-                vertex_index_to_new_indices[vertex_index] = []
+        attributes = {}
 
-            #
+        blender_idxs = prim_dots['vertex_index']
 
-            v = None
-            n = None
-            t = None
-            b = None
-            uvs = []
-            colors = []
-            joints = []
-            weights = []
+        attributes['POSITION'] = locs[blender_idxs]
 
-            target_positions = []
-            target_normals = []
-            target_tangents = []
+        for morph_i, vs in enumerate(morph_locs):
+            attributes['MORPH_POSITION_%d' % morph_i] = vs[blender_idxs]
 
-            vertex = blender_mesh.vertices[vertex_index]
+        if use_normals:
+            normals = np.empty((len(prim_dots), 3), dtype=np.float32)
+            normals[:, 0] = prim_dots['nx']
+            normals[:, 1] = prim_dots['ny']
+            normals[:, 2] = prim_dots['nz']
+            attributes['NORMAL'] = normals
 
-            v = convert_swizzle_location(vertex.co, armature, blender_object, export_settings)
-            if blender_polygon.use_smooth or blender_mesh.use_auto_smooth:
-                if blender_mesh.has_custom_normals:
-                    n = convert_swizzle_normal(blender_mesh.loops[loop_index].normal, armature, blender_object, export_settings)
-                else:
-                    n = convert_swizzle_normal(vertex.normal, armature, blender_object, export_settings)
-                if use_tangents:
-                    t = convert_swizzle_tangent(blender_mesh.loops[loop_index].tangent, armature, blender_object, export_settings)
-                    b = convert_swizzle_location(blender_mesh.loops[loop_index].bitangent, armature, blender_object, export_settings)
-            else:
-                n = convert_swizzle_normal(face_normal, armature, blender_object, export_settings)
-                if use_tangents:
-                    t = convert_swizzle_tangent(face_tangent, armature, blender_object, export_settings)
-                    b = convert_swizzle_location(face_bitangent, armature, blender_object, export_settings)
+        if use_tangents:
+            tangents = np.empty((len(prim_dots), 4), dtype=np.float32)
+            tangents[:, 0] = prim_dots['tx']
+            tangents[:, 1] = prim_dots['ty']
+            tangents[:, 2] = prim_dots['tz']
+            tangents[:, 3] = prim_dots['tw']
+            attributes['TANGENT'] = tangents
 
-            if use_tangents:
-                tv = Vector((t[0], t[1], t[2]))
-                bv = Vector((b[0], b[1], b[2]))
-                nv = Vector((n[0], n[1], n[2]))
+        if use_morph_normals:
+            for morph_i, _ in enumerate(key_blocks):
+                ns = np.empty((len(prim_dots), 3), dtype=np.float32)
+                ns[:, 0] = prim_dots['morph%dnx' % morph_i]
+                ns[:, 1] = prim_dots['morph%dny' % morph_i]
+                ns[:, 2] = prim_dots['morph%dnz' % morph_i]
+                attributes['MORPH_NORMAL_%d' % morph_i] = ns
 
-                if (nv.cross(tv)).dot(bv) < 0.0:
-                    t[3] = -1.0
+                if use_morph_tangents:
+                    attributes['MORPH_TANGENT_%d' % morph_i] = __calc_morph_tangents(normals, ns, tangents)
 
-            if blender_mesh.uv_layers.active:
-                for tex_coord_index in range(0, tex_coord_max):
-                    uv = blender_mesh.uv_layers[tex_coord_index].data[loop_index].uv
-                    uvs.append([uv.x, 1.0 - uv.y])
+        for tex_coord_i in range(tex_coord_max):
+            uvs = np.empty((len(prim_dots), 2), dtype=np.float32)
+            uvs[:, 0] = prim_dots['uv%dx' % tex_coord_i]
+            uvs[:, 1] = prim_dots['uv%dy' % tex_coord_i]
+            attributes['TEXCOORD_%d' % tex_coord_i] = uvs
 
-            #
+        for color_i in range(color_max):
+            colors = np.empty((len(prim_dots), 4), dtype=np.float32)
+            colors[:, 0] = prim_dots['color%dr' % color_i]
+            colors[:, 1] = prim_dots['color%dg' % color_i]
+            colors[:, 2] = prim_dots['color%db' % color_i]
+            colors[:, 3] = prim_dots['color%da' % color_i]
+            attributes['COLOR_%d' % color_i] = colors
 
-            if color_max > 0 and export_color:
-                for color_index in range(0, color_max):
-                    color_name = COLOR_PREFIX + str(color_index)
-                    color = vertex_colors[color_name].data[loop_index].color
-                    colors.append([
-                        color_srgb_to_scene_linear(color[0]),
-                        color_srgb_to_scene_linear(color[1]),
-                        color_srgb_to_scene_linear(color[2]),
-                        color[3]
-                    ])
+        if skin:
+            joints = [[] for _ in range(num_joint_sets)]
+            weights = [[] for _ in range(num_joint_sets)]
 
-            #
-
-            bone_count = 0
-
-            if blender_vertex_groups is not None and vertex.groups is not None and len(vertex.groups) > 0 and export_settings[gltf2_blender_export_keys.SKINS]:
-                joint = []
-                weight = []
-                vertex_groups = vertex.groups
-                if not export_settings['gltf_all_vertex_influences']:
-                    # sort groups by weight descending
-                    vertex_groups = sorted(vertex.groups, key=attrgetter('weight'), reverse=True)
-                for group_element in vertex_groups:
-
-                    if len(joint) == 4:
-                        bone_count += 1
-                        joints.append(joint)
-                        weights.append(weight)
-                        joint = []
-                        weight = []
-
-                    #
-
-                    joint_weight = group_element.weight
-                    if joint_weight <= 0.0:
-                        continue
-
-                    #
-
-                    vertex_group_index = group_element.group
-
-                    if vertex_group_index < 0 or vertex_group_index >= len(blender_vertex_groups):
-                        continue
-                    vertex_group_name = blender_vertex_groups[vertex_group_index].name
-
-                    joint_index = None
-
-                    if armature:
-                        skin = gltf2_blender_gather_skins.gather_skin(armature, export_settings)
-                        for index, j in enumerate(skin.joints):
-                            if j.name == vertex_group_name:
-                                joint_index = index
-                                break
-
-                    #
-                    if joint_index is not None:
-                        joint.append(joint_index)
-                        weight.append(joint_weight)
-
-                if len(joint) > 0:
-                    bone_count += 1
-
-                    for fill in range(0, 4 - len(joint)):
-                        joint.append(0)
-                        weight.append(0.0)
-
-                    joints.append(joint)
-                    weights.append(weight)
-
-            for fill in range(0, bone_max - bone_count):
-                joints.append([0, 0, 0, 0])
-                weights.append([0.0, 0.0, 0.0, 0.0])
-
-            #
-
-            if morph_max > 0 and export_settings[gltf2_blender_export_keys.MORPH]:
-                for morph_index in range(0, morph_max):
-                    blender_shape_key = blender_shape_keys[morph_index]
-
-                    v_morph = convert_swizzle_location(blender_shape_key.shape_key.data[vertex_index].co,
-                                                       armature, blender_object,
-                                                       export_settings)
-
-                    # Store delta.
-                    v_morph -= v
-
-                    target_positions.append(v_morph)
-
-                    #
-
-                    n_morph = None
-
-                    if blender_polygon.use_smooth:
-                        temp_normals = blender_shape_key.vertex_normals
-                        n_morph = (temp_normals[vertex_index * 3 + 0], temp_normals[vertex_index * 3 + 1],
-                                   temp_normals[vertex_index * 3 + 2])
+            for vi in blender_idxs:
+                bones = vert_bones[vi]
+                for j in range(0, 4 * num_joint_sets):
+                    if j < len(bones):
+                        joint, weight = bones[j]
                     else:
-                        temp_normals = blender_shape_key.polygon_normals
-                        n_morph = (
-                            temp_normals[blender_polygon.index * 3 + 0], temp_normals[blender_polygon.index * 3 + 1],
-                            temp_normals[blender_polygon.index * 3 + 2])
+                        joint, weight = 0, 0.0
+                    joints[j//4].append(joint)
+                    weights[j//4].append(weight)
 
-                    n_morph = convert_swizzle_normal(Vector(n_morph), armature, blender_object, export_settings)
+            for i, (js, ws) in enumerate(zip(joints, weights)):
+                attributes['JOINTS_%d' % i] = js
+                attributes['WEIGHTS_%d' % i] = ws
 
-                    # Store delta.
-                    n_morph -= n
+        primitives.append({
+            'attributes': attributes,
+            'indices': indices,
+            'material': material_idx,
+        })
 
-                    target_normals.append(n_morph)
+    print_console('INFO', 'Primitives created: %d' % len(primitives))
 
-                    #
+    return primitives
 
-                    if use_tangents:
-                        rotation = n_morph.rotation_difference(n)
 
-                        t_morph = Vector((t[0], t[1], t[2]))
+def __get_positions(blender_mesh, key_blocks, armature, blender_object, export_settings):
+    locs = np.empty(len(blender_mesh.vertices) * 3, dtype=np.float32)
+    blender_mesh.vertices.foreach_get('co', locs)
+    locs = locs.reshape(len(blender_mesh.vertices), 3)
 
-                        t_morph.rotate(rotation)
+    morph_locs = []
+    for key_block in key_blocks:
+        vs = np.empty(len(blender_mesh.vertices) * 3, dtype=np.float32)
+        key_block.data.foreach_get('co', vs)
+        vs = vs.reshape(len(blender_mesh.vertices), 3)
+        morph_locs.append(vs)
 
-                        target_tangents.append(t_morph)
+    # Transform for skinning
+    if armature and blender_object:
+        apply_matrix = armature.matrix_world.inverted() @ blender_object.matrix_world
+        loc_transform = armature.matrix_world @ apply_matrix
 
-            #
-            #
+        loc_transform = blender_object.matrix_world
+        locs[:] = __apply_mat_to_all(loc_transform, locs)
+        for vs in morph_locs:
+            vs[:] = __apply_mat_to_all(loc_transform, vs)
 
-            create = True
+    # glTF stores deltas in morph targets
+    for vs in morph_locs:
+        vs -= locs
 
-            for current_new_index in vertex_index_to_new_indices[vertex_index]:
-                found = True
+    if export_settings[gltf2_blender_export_keys.YUP]:
+        __zup2yup(locs)
+        for vs in morph_locs:
+            __zup2yup(vs)
 
-                for i in range(0, 3):
-                    if attributes[POSITION_ATTRIBUTE][current_new_index * 3 + i] != v[i]:
-                        found = False
-                        break
+    return locs, morph_locs
 
-                    if attributes[NORMAL_ATTRIBUTE][current_new_index * 3 + i] != n[i]:
-                        found = False
-                        break
 
-                if use_tangents:
-                    for i in range(0, 4):
-                        if attributes[TANGENT_ATTRIBUTE][current_new_index * 4 + i] != t[i]:
-                            found = False
-                            break
+def __get_normals(blender_mesh, key_blocks, armature, blender_object, export_settings):
+    """Get normal for each loop."""
+    blender_mesh.calc_normals_split()
 
-                if not found:
+    normals = np.empty(len(blender_mesh.loops) * 3, dtype=np.float32)
+    blender_mesh.loops.foreach_get('normal', normals)
+    normals = normals.reshape(len(blender_mesh.loops), 3)
+
+    morph_normals = []
+    for key_block in key_blocks:
+        ns = np.array(key_block.normals_split_get(), dtype=np.float32)
+        ns = ns.reshape(len(blender_mesh.loops), 3)
+        morph_normals.append(ns)
+
+    # Transform for skinning
+    if armature and blender_object:
+        apply_matrix = (armature.matrix_world.inverted() @ blender_object.matrix_world)
+        apply_matrix = apply_matrix.to_3x3().inverted().transposed()
+        normal_transform = armature.matrix_world.to_3x3() @ apply_matrix
+
+        normals[:] = __apply_mat_to_all(normal_transform, normals)
+        __normalize_vecs(normals)
+        for ns in morph_normals:
+            ns[:] = __apply_mat_to_all(normal_transform, ns)
+            __normalize_vecs(ns)
+
+    for ns in [normals, *morph_normals]:
+        # Replace zero normals with the unit UP vector.
+        # Seems to happen sometimes with degenerate tris?
+        is_zero = ~ns.any(axis=1)
+        ns[is_zero, 2] = 1
+
+    # glTF stores deltas in morph targets
+    for ns in morph_normals:
+        ns -= normals
+
+    if export_settings[gltf2_blender_export_keys.YUP]:
+        __zup2yup(normals)
+        for ns in morph_normals:
+            __zup2yup(ns)
+
+    return normals, morph_normals
+
+
+def __get_tangents(blender_mesh, armature, blender_object, export_settings):
+    """Get an array of the tangent for each loop."""
+    tangents = np.empty(len(blender_mesh.loops) * 3, dtype=np.float32)
+    blender_mesh.loops.foreach_get('tangent', tangents)
+    tangents = tangents.reshape(len(blender_mesh.loops), 3)
+
+    # Transform for skinning
+    if armature and blender_object:
+        apply_matrix = armature.matrix_world.inverted() @ blender_object.matrix_world
+        tangent_transform = apply_matrix.to_quaternion().to_matrix()
+        tangents = __apply_mat_to_all(tangent_transform, tangents)
+        __normalize_vecs(tangents)
+
+    if export_settings[gltf2_blender_export_keys.YUP]:
+        __zup2yup(tangents)
+
+    return tangents
+
+
+def __get_bitangent_signs(blender_mesh, armature, blender_object, export_settings):
+    signs = np.empty(len(blender_mesh.loops), dtype=np.float32)
+    blender_mesh.loops.foreach_get('bitangent_sign', signs)
+
+    # Transform for skinning
+    if armature and blender_object:
+        # Bitangent signs should flip when handedness changes
+        # TODO: confirm
+        apply_matrix = armature.matrix_world.inverted() @ blender_object.matrix_world
+        tangent_transform = apply_matrix.to_quaternion().to_matrix()
+        flipped = tangent_transform.determinant() < 0
+        if flipped:
+            signs *= -1
+
+    # No change for Zup -> Yup
+
+    return signs
+
+
+def __calc_morph_tangents(normals, morph_normal_deltas, tangents):
+    # TODO: check if this works
+    morph_tangent_deltas = np.empty((len(normals), 3), dtype=np.float32)
+
+    for i in range(len(normals)):
+        n = Vector(normals[i])
+        morph_n = n + Vector(morph_normal_deltas[i])  # convert back to non-delta
+        t = Vector(tangents[i, :3])
+
+        rotation = morph_n.rotation_difference(n)
+
+        t_morph = Vector(t)
+        t_morph.rotate(rotation)
+        morph_tangent_deltas[i] = t_morph - t  # back to delta
+
+    return morph_tangent_deltas
+
+
+def __get_uvs(blender_mesh, uv_i):
+    layer = blender_mesh.uv_layers[uv_i]
+    uvs = np.empty(len(blender_mesh.loops) * 2, dtype=np.float32)
+    layer.data.foreach_get('uv', uvs)
+    uvs = uvs.reshape(len(blender_mesh.loops), 2)
+
+    # Blender UV space -> glTF UV space
+    # u,v -> u,1-v
+    uvs[:, 1] *= -1
+    uvs[:, 1] += 1
+
+    return uvs
+
+
+def __get_colors(blender_mesh, color_i):
+    layer = blender_mesh.vertex_colors[color_i]
+    colors = np.empty(len(blender_mesh.loops) * 4, dtype=np.float32)
+    layer.data.foreach_get('color', colors)
+    colors = colors.reshape(len(blender_mesh.loops), 4)
+
+    # sRGB -> Linear
+    rgb = colors[:, :-1]
+    not_small = rgb >= 0.04045
+    small_result = np.where(rgb < 0.0, 0.0, rgb * (1.0 / 12.92))
+    large_result = np.power((rgb + 0.055) * (1.0 / 1.055), 2.4, where=not_small)
+    rgb[:] = np.where(not_small, large_result, small_result)
+
+    return colors
+
+
+def __get_bone_data(blender_mesh, skin, blender_vertex_groups):
+    joint_name_to_index = {joint.name: index for index, joint in enumerate(skin.joints)}
+    group_to_joint = [joint_name_to_index.get(g.name) for g in blender_vertex_groups]
+
+    # List of (joint, weight) pairs for each vert
+    vert_bones = []
+    max_num_influences = 0
+
+    for vertex in blender_mesh.vertices:
+        bones = []
+        if vertex.groups:
+            for group_element in vertex.groups:
+                weight = group_element.weight
+                if weight <= 0.0:
                     continue
+                try:
+                    joint = group_to_joint[group_element.group]
+                except Exception:
+                    continue
+                if joint is None:
+                    continue
+                bones.append((joint, weight))
+        bones.sort(key=lambda x: x[1], reverse=True)
+        if not bones: bones = ((0, 1.0),)  # HACK for verts with zero weight (#308)
+        vert_bones.append(bones)
+        if len(bones) > max_num_influences:
+            max_num_influences = len(bones)
 
-                for tex_coord_index in range(0, tex_coord_max):
-                    uv = uvs[tex_coord_index]
+    # How many joint sets do we need? 1 set = 4 influences
+    num_joint_sets = (max_num_influences + 3) // 4
 
-                    tex_coord_id = TEXCOORD_PREFIX + str(tex_coord_index)
-                    for i in range(0, 2):
-                        if attributes[tex_coord_id][current_new_index * 2 + i] != uv[i]:
-                            found = False
-                            break
+    return vert_bones, num_joint_sets
 
-                if export_color:
-                    for color_index in range(0, color_max):
-                        color = colors[color_index]
 
-                        color_id = COLOR_PREFIX + str(color_index)
-                        for i in range(0, 3):
-                            # Alpha is always 1.0 - see above.
-                            current_color = attributes[color_id][current_new_index * 4 + i]
-                            if color_srgb_to_scene_linear(current_color) != color[i]:
-                                found = False
-                                break
+def __zup2yup(array):
+    # x,y,z -> x,z,-y
+    array[:, [1,2]] = array[:, [2,1]]  # x,z,y
+    array[:, 2] *= -1  # x,z,-y
 
-                if export_settings[gltf2_blender_export_keys.SKINS]:
-                    for bone_index in range(0, bone_max):
-                        joint = joints[bone_index]
-                        weight = weights[bone_index]
 
-                        joint_id = JOINTS_PREFIX + str(bone_index)
-                        weight_id = WEIGHTS_PREFIX + str(bone_index)
-                        for i in range(0, 4):
-                            if attributes[joint_id][current_new_index * 4 + i] != joint[i]:
-                                found = False
-                                break
-                            if attributes[weight_id][current_new_index * 4 + i] != weight[i]:
-                                found = False
-                                break
+def __apply_mat_to_all(matrix, vectors):
+    """Given matrix m and vectors [v1,v2,...], computes [m@v1,m@v2,...]"""
+    # Linear part
+    m = matrix.to_3x3() if len(matrix) == 4 else matrix
+    res = np.matmul(vectors, np.array(m.transposed()))
+    # Translation part
+    if len(matrix) == 4:
+        res += np.array(matrix.translation)
+    return res
 
-                if export_settings[gltf2_blender_export_keys.MORPH]:
-                    for morph_index in range(0, morph_max):
-                        target_position = target_positions[morph_index]
-                        target_normal = target_normals[morph_index]
-                        if use_tangents:
-                            target_tangent = target_tangents[morph_index]
 
-                        target_position_id = MORPH_POSITION_PREFIX + str(morph_index)
-                        target_normal_id = MORPH_NORMAL_PREFIX + str(morph_index)
-                        target_tangent_id = MORPH_TANGENT_PREFIX + str(morph_index)
-                        for i in range(0, 3):
-                            if attributes[target_position_id][current_new_index * 3 + i] != target_position[i]:
-                                found = False
-                                break
-                            if attributes[target_normal_id][current_new_index * 3 + i] != target_normal[i]:
-                                found = False
-                                break
-                            if use_tangents:
-                                if attributes[target_tangent_id][current_new_index * 3 + i] != target_tangent[i]:
-                                    found = False
-                                    break
-
-                if found:
-                    indices.append(current_new_index)
-
-                    create = False
-                    break
-
-            if not create:
-                continue
-
-            new_index = 0
-
-            if primitive.get('max_index') is not None:
-                new_index = primitive['max_index'] + 1
-
-            primitive['max_index'] = new_index
-
-            vertex_index_to_new_indices[vertex_index].append(new_index)
-
-            #
-            #
-
-            indices.append(new_index)
-
-            #
-
-            attributes[POSITION_ATTRIBUTE].extend(v)
-            attributes[NORMAL_ATTRIBUTE].extend(n)
-            if use_tangents:
-                attributes[TANGENT_ATTRIBUTE].extend(t)
-
-            if blender_mesh.uv_layers.active:
-                for tex_coord_index in range(0, tex_coord_max):
-                    tex_coord_id = TEXCOORD_PREFIX + str(tex_coord_index)
-
-                    if attributes.get(tex_coord_id) is None:
-                        attributes[tex_coord_id] = []
-
-                    attributes[tex_coord_id].extend(uvs[tex_coord_index])
-
-            if export_color:
-                for color_index in range(0, color_max):
-                    color_id = COLOR_PREFIX + str(color_index)
-
-                    if attributes.get(color_id) is None:
-                        attributes[color_id] = []
-
-                    attributes[color_id].extend(colors[color_index])
-
-            if export_settings[gltf2_blender_export_keys.SKINS]:
-                for bone_index in range(0, bone_max):
-                    joint_id = JOINTS_PREFIX + str(bone_index)
-
-                    if attributes.get(joint_id) is None:
-                        attributes[joint_id] = []
-
-                    attributes[joint_id].extend(joints[bone_index])
-
-                    weight_id = WEIGHTS_PREFIX + str(bone_index)
-
-                    if attributes.get(weight_id) is None:
-                        attributes[weight_id] = []
-
-                    attributes[weight_id].extend(weights[bone_index])
-
-            if export_settings[gltf2_blender_export_keys.MORPH]:
-                for morph_index in range(0, morph_max):
-                    target_position_id = MORPH_POSITION_PREFIX + str(morph_index)
-
-                    if attributes.get(target_position_id) is None:
-                        attributes[target_position_id] = []
-
-                    attributes[target_position_id].extend(target_positions[morph_index])
-
-                    target_normal_id = MORPH_NORMAL_PREFIX + str(morph_index)
-
-                    if attributes.get(target_normal_id) is None:
-                        attributes[target_normal_id] = []
-
-                    attributes[target_normal_id].extend(target_normals[morph_index])
-
-                    if use_tangents:
-                        target_tangent_id = MORPH_TANGENT_PREFIX + str(morph_index)
-
-                        if attributes.get(target_tangent_id) is None:
-                            attributes[target_tangent_id] = []
-
-                        attributes[target_tangent_id].extend(target_tangents[morph_index])
-
-    #
-    # Add non-empty primitives
-    #
-
-    result_primitives = [
-        primitive
-        for primitive in material_idx_to_primitives.values()
-        if len(primitive[INDICES_ID]) != 0
-    ]
-
-    print_console('INFO', 'Primitives created: ' + str(len(result_primitives)))
-
-    return result_primitives
+def __normalize_vecs(vectors):
+    norms = np.linalg.norm(vectors, axis=1, keepdims=True)
+    np.divide(vectors, norms, out=vectors, where=norms != 0)
